@@ -8,7 +8,6 @@ import {
   VolumeX, 
   Maximize, 
   Minimize, 
-  Settings, 
   Lock, 
   Check, 
   Radio, 
@@ -16,6 +15,8 @@ import {
   AlertCircle,
   Headphones
 } from "lucide-react";
+import { rtdb } from "../lib/firebase";
+import { ref, onChildAdded, off } from "firebase/database";
 
 export interface VideoPlayerProps {
   src: string;
@@ -32,6 +33,8 @@ export interface VideoPlayerProps {
   onPlaybackChange?: (state: { isPlaying: boolean; currentTime: number }) => void;
   onAudioTrackChange?: (index: number) => void;
   onVideoEnded?: () => void;
+  roomCode?: string;
+  currentUserId?: string;
 }
 
 export function VideoPlayer({
@@ -42,7 +45,9 @@ export function VideoPlayer({
   syncState,
   onPlaybackChange,
   onAudioTrackChange,
-  onVideoEnded
+  onVideoEnded,
+  roomCode,
+  currentUserId
 }: VideoPlayerProps) {
   const containerRef = useRef<HTMLDivElement>(null);
   const videoRef = useRef<HTMLVideoElement>(null);
@@ -53,14 +58,22 @@ export function VideoPlayer({
   const [bufferedEnd, setBufferedEnd] = useState(0);
   const [volume, setVolume] = useState(1);
   const [isMuted, setIsMuted] = useState(false);
-  const [playbackRate, setPlaybackRate] = useState(1);
   const [isFullscreen, setIsFullscreen] = useState(false);
 
   const [isBuffering, setIsBuffering] = useState(true);
   const [playbackError, setPlaybackError] = useState<string | null>(null);
   const [showControls, setShowControls] = useState(true);
-  const [showSpeedMenu, setShowSpeedMenu] = useState(false);
   const [showAudioMenu, setShowAudioMenu] = useState(false);
+
+  // Fullscreen chat message overlay
+  const [fullscreenChatOverlay, setFullscreenChatOverlay] = useState<{
+    id: string;
+    username: string;
+    text: string;
+  } | null>(null);
+  const overlayTimerRef = useRef<number | null>(null);
+  const fullscreenEnteredAtRef = useRef<number>(Infinity);
+  const isFullscreenRef = useRef<boolean>(false);
 
   // Audio track support detection
   const [availableAudioTracks, setAvailableAudioTracks] = useState<any[]>([]);
@@ -72,18 +85,25 @@ export function VideoPlayer({
 
   const canControl = isHost || !controlsLocked;
 
-  // Auto hide controls
+  // Auto-hide controls after 2 seconds of inactivity
   const resetControlsTimeout = useCallback(() => {
     setShowControls(true);
-    if (controlsTimeoutRef.current) clearTimeout(controlsTimeoutRef.current);
-    if (isPlaying) {
+    if (controlsTimeoutRef.current) {
+      clearTimeout(controlsTimeoutRef.current);
+      controlsTimeoutRef.current = null;
+    }
+    // Auto-hide after 2 seconds:
+    // - For locked non-admin users: always auto-hide after 2s of no interaction
+    // - For fullscreen playback: always auto-hide after 2s of no interaction
+    // - For active playback: auto-hide after 2s of no interaction
+    if (!canControl || isFullscreen || isPlaying) {
       controlsTimeoutRef.current = window.setTimeout(() => {
         setShowControls(false);
-        setShowSpeedMenu(false);
         setShowAudioMenu(false);
-      }, 3500);
+        controlsTimeoutRef.current = null;
+      }, 2000);
     }
-  }, [isPlaying]);
+  }, [canControl, isFullscreen, isPlaying]);
 
   // Audio Tracks Detection (where browser supports HTML5 audioTracks API)
   const detectAudioTracks = useCallback(() => {
@@ -100,7 +120,9 @@ export function VideoPlayer({
       }
       setAvailableAudioTracks(tracks);
     } else {
-      setAvailableAudioTracks([]);
+      setAvailableAudioTracks([
+        { index: 0, label: "Default Audio", enabled: true }
+      ]);
     }
   }, []);
 
@@ -276,9 +298,17 @@ export function VideoPlayer({
     const handleFullscreenChange = () => {
       const isFs = isCurrentlyFullscreen();
       setIsFullscreen(isFs);
+      isFullscreenRef.current = isFs;
       if (isFs) {
+        fullscreenEnteredAtRef.current = Date.now();
         lockLandscapeOrientation();
       } else {
+        fullscreenEnteredAtRef.current = Infinity;
+        setFullscreenChatOverlay(null);
+        if (overlayTimerRef.current) {
+          clearTimeout(overlayTimerRef.current);
+          overlayTimerRef.current = null;
+        }
         unlockScreenOrientation();
       }
     };
@@ -291,10 +321,19 @@ export function VideoPlayer({
     const video = videoRef.current;
     const onWebkitBegin = () => {
       setIsFullscreen(true);
+      isFullscreenRef.current = true;
+      fullscreenEnteredAtRef.current = Date.now();
       lockLandscapeOrientation();
     };
     const onWebkitEnd = () => {
       setIsFullscreen(false);
+      isFullscreenRef.current = false;
+      fullscreenEnteredAtRef.current = Infinity;
+      setFullscreenChatOverlay(null);
+      if (overlayTimerRef.current) {
+        clearTimeout(overlayTimerRef.current);
+        overlayTimerRef.current = null;
+      }
       unlockScreenOrientation();
     };
 
@@ -315,6 +354,74 @@ export function VideoPlayer({
       unlockScreenOrientation();
     };
   }, []);
+
+  // Sync fullscreen state ref
+  useEffect(() => {
+    isFullscreenRef.current = isFullscreen;
+    if (isFullscreen) {
+      fullscreenEnteredAtRef.current = Date.now();
+    } else {
+      fullscreenEnteredAtRef.current = Infinity;
+      if (overlayTimerRef.current) {
+        clearTimeout(overlayTimerRef.current);
+        overlayTimerRef.current = null;
+      }
+      setFullscreenChatOverlay(null);
+    }
+  }, [isFullscreen]);
+
+  // Realtime Database Fullscreen Chat Message Overlay Listener
+  useEffect(() => {
+    if (!roomCode) return;
+
+    const chatRef = ref(rtdb, `rooms/${roomCode}/chat`);
+
+    const handleChildAdded = (snapshot: any) => {
+      const msg = snapshot.val();
+      if (!msg) return;
+
+      // Only show when in fullscreen
+      if (!isFullscreenRef.current) return;
+
+      // Do not show user's own message
+      if (currentUserId && msg.uid === currentUserId) return;
+
+      // Only show messages received after the user entered fullscreen; do not replay old chat messages
+      const msgTime = Number(msg.createdAt) || 0;
+      if (msgTime < fullscreenEnteredAtRef.current) return;
+
+      const displayContent =
+        msg.type === "voice"
+          ? "🎤 Sent a voice note"
+          : (msg.text || "");
+
+      if (!displayContent) return;
+
+      setFullscreenChatOverlay({
+        id: snapshot.key || Date.now().toString(),
+        username: msg.username || "Participant",
+        text: displayContent
+      });
+
+      if (overlayTimerRef.current) {
+        clearTimeout(overlayTimerRef.current);
+      }
+      overlayTimerRef.current = window.setTimeout(() => {
+        setFullscreenChatOverlay(null);
+        overlayTimerRef.current = null;
+      }, 2000);
+    };
+
+    onChildAdded(chatRef, handleChildAdded);
+
+    return () => {
+      off(chatRef, "child_added", handleChildAdded);
+      if (overlayTimerRef.current) {
+        clearTimeout(overlayTimerRef.current);
+        overlayTimerRef.current = null;
+      }
+    };
+  }, [roomCode, currentUserId]);
 
   // Keyboard controls
   useEffect(() => {
@@ -413,14 +520,7 @@ export function VideoPlayer({
     const nextMuted = !isMuted;
     videoRef.current.muted = nextMuted;
     setIsMuted(nextMuted);
-  };
-
-  const handleSpeedSelect = (rate: number) => {
-    setPlaybackRate(rate);
-    if (videoRef.current) {
-      videoRef.current.playbackRate = rate;
-    }
-    setShowSpeedMenu(false);
+    resetControlsTimeout();
   };
 
   const handleAudioTrackSelect = (trackIndex: number) => {
@@ -433,8 +533,11 @@ export function VideoPlayer({
       if (onAudioTrackChange && canControl) {
         onAudioTrackChange(trackIndex);
       }
+    } else {
+      setCurrentAudioTrack(trackIndex);
     }
     setShowAudioMenu(false);
+    resetControlsTimeout();
   };
 
   const toggleFullscreen = () => {
@@ -489,13 +592,44 @@ export function VideoPlayer({
   const progressPercent = duration > 0 ? (currentTime / duration) * 100 : 0;
   const bufferedPercent = duration > 0 ? (bufferedEnd / duration) * 100 : 0;
 
+  const handleVideoClick = (e: React.MouseEvent) => {
+    e.stopPropagation();
+    if (canControl) {
+      togglePlayPause();
+      resetControlsTimeout();
+    } else {
+      // For locked non-admin users, tapping the video toggles/shows controls and resets the 2s timer
+      if (!showControls) {
+        setShowControls(true);
+        resetControlsTimeout();
+      } else {
+        setShowControls(false);
+        if (controlsTimeoutRef.current) {
+          clearTimeout(controlsTimeoutRef.current);
+          controlsTimeoutRef.current = null;
+        }
+      }
+    }
+  };
+
   return (
     <div
       ref={containerRef}
       onMouseMove={resetControlsTimeout}
+      onTouchStart={resetControlsTimeout}
       onClick={() => {
-        resetControlsTimeout();
-        if (!showControls) setShowControls(true);
+        if (!showControls) {
+          setShowControls(true);
+          resetControlsTimeout();
+        } else if (!canControl) {
+          setShowControls(false);
+          if (controlsTimeoutRef.current) {
+            clearTimeout(controlsTimeoutRef.current);
+            controlsTimeoutRef.current = null;
+          }
+        } else {
+          resetControlsTimeout();
+        }
       }}
       className="relative w-full aspect-video bg-black rounded-2xl overflow-hidden group select-none shadow-2xl border border-neutral-800 flex items-center justify-center"
     >
@@ -507,10 +641,7 @@ export function VideoPlayer({
         playsInline
         preload="auto"
         className="w-full h-full object-contain cursor-pointer"
-        onClick={(e) => {
-          e.stopPropagation();
-          togglePlayPause();
-        }}
+        onClick={handleVideoClick}
       />
 
       {/* Buffering Indicator */}
@@ -541,13 +672,36 @@ export function VideoPlayer({
         </div>
       )}
 
-      {/* Control Lock Notice for non-admin */}
-      {!canControl && (
-        <div className="absolute top-4 left-4 z-20 flex items-center gap-1.5 px-3 py-1 rounded-full bg-neutral-900/80 backdrop-blur-md border border-amber-500/30 text-amber-400 text-xs font-medium shadow-md">
-          <Lock className="w-3.5 h-3.5" />
-          <span>Host Locked Playback Controls</span>
-        </div>
-      )}
+      {/* Top-Left Overlays Container (Lock Notice & Fullscreen Chat Overlay) */}
+      <div className="absolute top-4 left-4 z-40 flex flex-col items-start gap-2 pointer-events-none max-w-[85vw] sm:max-w-sm">
+        {/* Control Lock Notice for non-admin */}
+        {!canControl && (
+          <div className="flex items-center gap-1.5 px-3 py-1 rounded-full bg-neutral-900/85 backdrop-blur-md border border-amber-500/30 text-amber-400 text-xs font-medium shadow-lg">
+            <Lock className="w-3.5 h-3.5" />
+            <span>Host Locked Playback Controls</span>
+          </div>
+        )}
+
+        {/* Fullscreen Chat Message Overlay */}
+        {isFullscreen && fullscreenChatOverlay && (
+          <div
+            key={fullscreenChatOverlay.id}
+            className="w-full transition-all duration-200"
+          >
+            <div className="flex items-start gap-2.5 px-3.5 py-2 rounded-xl bg-neutral-950/90 border border-neutral-750/90 backdrop-blur-md shadow-2xl text-white">
+              <div className="w-2 h-2 rounded-full bg-rose-500 mt-1.5 shrink-0 animate-pulse" />
+              <div className="min-w-0 flex-1">
+                <p className="text-xs font-bold text-rose-400 truncate">
+                  @{fullscreenChatOverlay.username}
+                </p>
+                <p className="text-xs text-neutral-200 break-words line-clamp-2 mt-0.5 leading-snug">
+                  {fullscreenChatOverlay.text}
+                </p>
+              </div>
+            </div>
+          </div>
+        )}
+      </div>
 
       {/* Real-time Sync Indicator */}
       <div className="absolute top-4 right-4 z-20 flex items-center gap-1.5 px-3 py-1 rounded-full bg-black/60 backdrop-blur-md border border-neutral-700/80 text-emerald-400 text-[11px] font-mono shadow-md">
@@ -555,10 +709,10 @@ export function VideoPlayer({
         <span>Sync Active</span>
       </div>
 
-      {/* Centered Large Play/Pause Animation Overlay on Click */}
+      {/* Centered Large Play/Pause Animation Overlay (only visible to controllers when paused) */}
       <div
         className={`absolute inset-0 z-10 flex items-center justify-center pointer-events-none transition-opacity duration-300 ${
-          showControls && !isPlaying ? "opacity-100" : "opacity-0"
+          showControls && !isPlaying && canControl ? "opacity-100" : "opacity-0"
         }`}
       >
         <div className="w-16 h-16 sm:w-20 sm:h-20 rounded-full bg-rose-600/90 text-white flex items-center justify-center shadow-2xl backdrop-blur-md transform scale-100 transition-transform">
@@ -571,7 +725,12 @@ export function VideoPlayer({
         className={`absolute inset-x-0 bottom-0 z-20 pt-16 pb-3 px-4 bg-gradient-to-t from-black/95 via-black/60 to-transparent transition-opacity duration-300 ${
           showControls ? "opacity-100" : "opacity-0 pointer-events-none"
         }`}
-        onClick={(e) => e.stopPropagation()}
+        onClick={(e) => {
+          e.stopPropagation();
+          resetControlsTimeout();
+        }}
+        onTouchStart={resetControlsTimeout}
+        onMouseMove={resetControlsTimeout}
       >
         {/* Scrubber / Progress Bar */}
         <div className="relative group/scrub mb-2.5">
@@ -602,7 +761,7 @@ export function VideoPlayer({
             onMouseUp={handleSeekEnd}
             onTouchEnd={handleSeekEnd}
             className={`absolute inset-0 w-full h-full opacity-0 ${
-              canControl ? "cursor-pointer" : "cursor-not-allowed"
+              canControl ? "cursor-pointer" : "cursor-not-allowed pointer-events-none"
             }`}
           />
         </div>
@@ -612,28 +771,49 @@ export function VideoPlayer({
           {/* Left: Play, Skip, Volume, Time */}
           <div className="flex items-center gap-2 sm:gap-3">
             <button
-              onClick={togglePlayPause}
+              onClick={(e) => {
+                e.stopPropagation();
+                if (!canControl) return;
+                togglePlayPause();
+                resetControlsTimeout();
+              }}
               disabled={!canControl}
-              className="p-1.5 sm:p-2 rounded-lg hover:bg-white/15 transition disabled:opacity-40"
-              title={isPlaying ? "Pause (Space)" : "Play (Space)"}
+              className={`p-1.5 sm:p-2 rounded-lg transition ${
+                canControl ? "hover:bg-white/15 cursor-pointer text-white" : "opacity-40 cursor-not-allowed text-neutral-400"
+              }`}
+              title={!canControl ? "Playback controls locked by host" : (isPlaying ? "Pause (Space)" : "Play (Space)")}
             >
-              {isPlaying ? <Pause className="w-5 h-5 fill-white" /> : <Play className="w-5 h-5 fill-white ml-0.5" />}
+              {isPlaying ? <Pause className="w-5 h-5 fill-current" /> : <Play className="w-5 h-5 fill-current ml-0.5" />}
             </button>
 
             <button
-              onClick={() => seekRelative(-10)}
+              onClick={(e) => {
+                e.stopPropagation();
+                if (!canControl) return;
+                seekRelative(-10);
+                resetControlsTimeout();
+              }}
               disabled={!canControl}
-              className="p-1.5 rounded-lg hover:bg-white/15 transition disabled:opacity-40"
-              title="Skip backward 10s (Left Arrow)"
+              className={`p-1.5 rounded-lg transition ${
+                canControl ? "hover:bg-white/15 cursor-pointer text-white" : "opacity-40 cursor-not-allowed text-neutral-400"
+              }`}
+              title={!canControl ? "Playback controls locked by host" : "Skip backward 10s (Left Arrow)"}
             >
               <RotateCcw className="w-4 h-4" />
             </button>
 
             <button
-              onClick={() => seekRelative(10)}
+              onClick={(e) => {
+                e.stopPropagation();
+                if (!canControl) return;
+                seekRelative(10);
+                resetControlsTimeout();
+              }}
               disabled={!canControl}
-              className="p-1.5 rounded-lg hover:bg-white/15 transition disabled:opacity-40"
-              title="Skip forward 10s (Right Arrow)"
+              className={`p-1.5 rounded-lg transition ${
+                canControl ? "hover:bg-white/15 cursor-pointer text-white" : "opacity-40 cursor-not-allowed text-neutral-400"
+              }`}
+              title={!canControl ? "Playback controls locked by host" : "Skip forward 10s (Right Arrow)"}
             >
               <RotateCw className="w-4 h-4" />
             </button>
@@ -641,8 +821,11 @@ export function VideoPlayer({
             {/* Volume */}
             <div className="flex items-center gap-1.5 group/vol">
               <button
-                onClick={toggleMute}
-                className="p-1.5 rounded-lg hover:bg-white/15 transition"
+                onClick={(e) => {
+                  e.stopPropagation();
+                  toggleMute();
+                }}
+                className="p-1.5 rounded-lg hover:bg-white/15 transition text-white"
                 title={isMuted ? "Unmute (M)" : "Mute (M)"}
               >
                 {isMuted || volume === 0 ? (
@@ -658,7 +841,10 @@ export function VideoPlayer({
                 max={1}
                 step={0.05}
                 value={isMuted ? 0 : volume}
-                onChange={handleVolumeChange}
+                onChange={(e) => {
+                  handleVolumeChange(e);
+                  resetControlsTimeout();
+                }}
                 className="w-14 sm:w-20 h-1 bg-neutral-600 accent-rose-500 rounded-lg cursor-pointer hidden sm:block"
               />
             </div>
@@ -671,24 +857,33 @@ export function VideoPlayer({
             </div>
           </div>
 
-          {/* Right: Audio Track, Speed, Fullscreen */}
+          {/* Right: Audio Track, Fullscreen */}
           <div className="flex items-center gap-2 relative">
-            {/* Audio Track Selector (when supported) */}
-            {availableAudioTracks.length > 1 && (
+            {/* Audio Track Selector (Available to all users, even if locked) */}
+            {availableAudioTracks.length > 0 && (
               <div className="relative">
                 <button
-                  onClick={() => {
+                  onClick={(e) => {
+                    e.stopPropagation();
                     setShowAudioMenu(!showAudioMenu);
-                    setShowSpeedMenu(false);
+                    resetControlsTimeout();
                   }}
-                  className="p-1.5 rounded-lg hover:bg-white/15 transition flex items-center gap-1 text-xs"
+                  className={`p-1.5 rounded-lg transition flex items-center gap-1 text-xs ${
+                    showAudioMenu ? "bg-rose-600 text-white" : "hover:bg-white/15 text-neutral-300 hover:text-white"
+                  }`}
                   title="Select Audio Track"
                 >
                   <Headphones className="w-4 h-4" />
                 </button>
 
                 {showAudioMenu && (
-                  <div className="absolute right-0 bottom-full mb-2 bg-neutral-900 border border-neutral-750 rounded-xl p-1.5 shadow-xl w-40 z-30">
+                  <div
+                    onClick={(e) => {
+                      e.stopPropagation();
+                      resetControlsTimeout();
+                    }}
+                    className="absolute right-0 bottom-full mb-2 bg-neutral-900 border border-neutral-750 rounded-xl p-1.5 shadow-xl w-44 z-30"
+                  >
                     <p className="text-[10px] font-semibold uppercase tracking-wider text-neutral-400 px-2 py-1">
                       Audio Tracks
                     </p>
@@ -700,8 +895,8 @@ export function VideoPlayer({
                           currentAudioTrack === tr.index ? "bg-rose-600 text-white" : "text-neutral-300 hover:bg-neutral-800"
                         }`}
                       >
-                        <span>{tr.label}</span>
-                        {currentAudioTrack === tr.index && <Check className="w-3.5 h-3.5" />}
+                        <span className="truncate">{tr.label}</span>
+                        {currentAudioTrack === tr.index && <Check className="w-3.5 h-3.5 shrink-0" />}
                       </button>
                     ))}
                   </div>
@@ -709,44 +904,14 @@ export function VideoPlayer({
               </div>
             )}
 
-            {/* Playback Speed Menu */}
-            <div className="relative">
-              <button
-                onClick={() => {
-                  setShowSpeedMenu(!showSpeedMenu);
-                  setShowAudioMenu(false);
-                }}
-                className="px-2 py-1 rounded-lg hover:bg-white/15 transition text-xs font-mono font-medium"
-                title="Playback Speed"
-              >
-                {playbackRate}x
-              </button>
-
-              {showSpeedMenu && (
-                <div className="absolute right-0 bottom-full mb-2 bg-neutral-900 border border-neutral-750 rounded-xl p-1.5 shadow-xl w-32 z-30">
-                  <p className="text-[10px] font-semibold uppercase tracking-wider text-neutral-400 px-2 py-1">
-                    Speed
-                  </p>
-                  {[0.5, 0.75, 1, 1.25, 1.5, 2].map((rate) => (
-                    <button
-                      key={rate}
-                      onClick={() => handleSpeedSelect(rate)}
-                      className={`w-full text-left px-2.5 py-1.5 rounded-lg text-xs flex items-center justify-between transition ${
-                        playbackRate === rate ? "bg-rose-600 text-white" : "text-neutral-300 hover:bg-neutral-800"
-                      }`}
-                    >
-                      <span>{rate}x</span>
-                      {playbackRate === rate && <Check className="w-3.5 h-3.5" />}
-                    </button>
-                  ))}
-                </div>
-              )}
-            </div>
-
-            {/* Fullscreen Button */}
+            {/* Fullscreen Button (Available to all users, even if locked) */}
             <button
-              onClick={toggleFullscreen}
-              className="p-1.5 rounded-lg hover:bg-white/15 transition"
+              onClick={(e) => {
+                e.stopPropagation();
+                toggleFullscreen();
+                resetControlsTimeout();
+              }}
+              className="p-1.5 rounded-lg hover:bg-white/15 transition text-white"
               title={isFullscreen ? "Exit Fullscreen (F)" : "Fullscreen (F)"}
             >
               {isFullscreen ? <Minimize className="w-4 h-4" /> : <Maximize className="w-4 h-4" />}
