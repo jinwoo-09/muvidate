@@ -48,6 +48,12 @@ export function WatchRoom({ roomCode, initialOfflineFile, onLeaveRoom }: WatchRo
   const [isChangeMediaOpen, setIsChangeMediaOpen] = useState(false);
   const [isVoiceRecording, setIsVoiceRecording] = useState(false);
 
+  // Dynamic height refs and measurements for sticky positioning and spacing
+  const headerRef = useRef<HTMLDivElement>(null);
+  const playerWrapperRef = useRef<HTMLDivElement>(null);
+  const [headerHeight, setHeaderHeight] = useState<number>(76);
+  const [playerHeight, setPlayerHeight] = useState<number>(0);
+
   // Throttled sync updates
   const lastSyncWriteTime = useRef<number>(0);
 
@@ -56,6 +62,43 @@ export function WatchRoom({ roomCode, initialOfflineFile, onLeaveRoom }: WatchRo
     if (!room) return "";
     return room.movieSource === "offline" ? (localVideoUrl || "") : (room.movieUrl || "");
   }, [room?.movieSource, room?.movieUrl, localVideoUrl]);
+
+  // Dynamically measure header and player heights on mount, resize, orientation changes, or content updates
+  useEffect(() => {
+    const updateDimensions = () => {
+      if (headerRef.current) {
+        setHeaderHeight(headerRef.current.offsetHeight);
+      }
+      if (playerWrapperRef.current) {
+        setPlayerHeight(playerWrapperRef.current.offsetHeight);
+      }
+    };
+
+    updateDimensions();
+
+    const observers: ResizeObserver[] = [];
+    if (typeof ResizeObserver !== "undefined") {
+      if (headerRef.current) {
+        const ro1 = new ResizeObserver(updateDimensions);
+        ro1.observe(headerRef.current);
+        observers.push(ro1);
+      }
+      if (playerWrapperRef.current) {
+        const ro2 = new ResizeObserver(updateDimensions);
+        ro2.observe(playerWrapperRef.current);
+        observers.push(ro2);
+      }
+    }
+
+    window.addEventListener("resize", updateDimensions);
+    window.addEventListener("orientationchange", updateDimensions);
+
+    return () => {
+      observers.forEach((obs) => obs.disconnect());
+      window.removeEventListener("resize", updateDimensions);
+      window.removeEventListener("orientationchange", updateDimensions);
+    };
+  }, [room?.movieTitle, room?.movieSource, effectiveVideoSrc]);
 
   const handleOfflineFileSelected = useCallback((file: File) => {
     const url = URL.createObjectURL(file);
@@ -316,115 +359,120 @@ export function WatchRoom({ roomCode, initialOfflineFile, onLeaveRoom }: WatchRo
   const activeParticipantsCount = participantsList.filter((p) => p.isOnline).length;
 
   return (
-    <div className="max-w-7xl mx-auto px-3 sm:px-6 py-4 space-y-4">
-      {/* Top Navigation & Status Bar */}
-      <div className="flex flex-wrap items-center justify-between gap-3 p-3 bg-neutral-900/90 border border-neutral-800 rounded-2xl backdrop-blur-md">
-        <div className="flex items-center gap-3">
-          <button
-            onClick={onLeaveRoom}
-            className="p-2 text-neutral-400 hover:text-white rounded-xl hover:bg-neutral-800 transition flex items-center gap-1.5 text-xs font-semibold"
-            title="Leave Room"
-          >
-            <LogOut className="w-4 h-4" />
-            <span className="hidden sm:inline">Leave Room</span>
-          </button>
-
-          <div className="h-4 w-px bg-neutral-800" />
-
-          {/* Room Code Badge */}
-          <div className="flex items-center gap-2 bg-neutral-950 px-3 py-1.5 rounded-xl border border-neutral-800">
-            <span className="text-[10px] uppercase font-bold tracking-wider text-neutral-400">
-              Code:
-            </span>
-            <span className="font-mono text-base font-extrabold tracking-widest text-white">
-              {room.roomCode}
-            </span>
+    <div className="max-w-7xl mx-auto px-3 sm:px-6 py-2 sm:py-4 space-y-4">
+      {/* Top Navigation & Status Bar - Sticky at Top of Room Viewport */}
+      <header
+        ref={headerRef}
+        className="sticky top-0 z-[10000] bg-neutral-950/95 backdrop-blur-md pt-[env(safe-area-inset-top,0px)] pb-2 -mx-3 sm:-mx-6 px-3 sm:px-6 transition-all"
+      >
+        <div className="flex flex-wrap items-center justify-between gap-3 p-3 bg-neutral-900/90 border border-neutral-800 rounded-2xl backdrop-blur-md shadow-xl">
+          <div className="flex items-center gap-3">
             <button
-              onClick={copyRoomCode}
-              className="p-1 text-neutral-400 hover:text-white rounded transition"
-              title="Copy 4-digit code"
+              onClick={onLeaveRoom}
+              className="p-2 text-neutral-400 hover:text-white rounded-xl hover:bg-neutral-800 transition flex items-center gap-1.5 text-xs font-semibold"
+              title="Leave Room"
             >
-              {copied ? <Check className="w-3.5 h-3.5 text-emerald-400" /> : <Copy className="w-3.5 h-3.5" />}
+              <LogOut className="w-4 h-4" />
+              <span className="hidden sm:inline">Leave Room</span>
             </button>
-            <button
-              onClick={shareRoom}
-              className="p-1 text-neutral-400 hover:text-white rounded transition"
-              title="Share Room"
-            >
-              <Share2 className="w-3.5 h-3.5" />
-            </button>
-          </div>
-        </div>
 
-        {/* Center/Right: Movie Title & Host Controls */}
-        <div className="flex items-center gap-2.5 sm:gap-4 flex-wrap">
-          <div className="flex items-center gap-2">
-            <span className="text-xs font-bold text-white truncate max-w-[180px] sm:max-w-xs">
-              {room.movieTitle}
-            </span>
-            {isOfflineSource && (
-              <span className="px-2 py-0.5 rounded-full text-[10px] font-semibold bg-amber-500/15 text-amber-400 border border-amber-500/30">
-                Offline Video
+            <div className="h-4 w-px bg-neutral-800" />
+
+            {/* Room Code Badge */}
+            <div className="flex items-center gap-2 bg-neutral-950 px-3 py-1.5 rounded-xl border border-neutral-800">
+              <span className="text-[10px] uppercase font-bold tracking-wider text-neutral-400">
+                Code:
               </span>
-            )}
+              <span className="font-mono text-base font-extrabold tracking-widest text-white">
+                {room.roomCode}
+              </span>
+              <button
+                onClick={copyRoomCode}
+                className="p-1 text-neutral-400 hover:text-white rounded transition"
+                title="Copy 4-digit code"
+              >
+                {copied ? <Check className="w-3.5 h-3.5 text-emerald-400" /> : <Copy className="w-3.5 h-3.5" />}
+              </button>
+              <button
+                onClick={shareRoom}
+                className="p-1 text-neutral-400 hover:text-white rounded transition"
+                title="Share Room"
+              >
+                <Share2 className="w-3.5 h-3.5" />
+              </button>
+            </div>
           </div>
 
-          {/* Change Media Option */}
-          <button
-            onClick={() => setIsChangeMediaOpen(true)}
-            className="flex items-center gap-1.5 px-3 py-1.5 rounded-xl text-xs font-semibold bg-neutral-800 hover:bg-neutral-750 text-neutral-200 hover:text-white border border-neutral-700 transition shadow-sm hover:border-rose-500/50"
-            title="Change Media Source (Search, MP4 URL, Offline Video)"
-          >
-            <RefreshCw className="w-3.5 h-3.5 text-rose-400" />
-            <span>Change Media</span>
-          </button>
-
-          {/* Host Admin Controls Lock Toggle */}
-          {isHost ? (
-            <button
-              onClick={handleToggleControlLock}
-              className={`flex items-center gap-1.5 px-3 py-1.5 rounded-xl text-xs font-semibold transition border ${
-                room.controlsLocked
-                  ? "bg-rose-500/15 border-rose-500 text-rose-300"
-                  : "bg-neutral-800 border-neutral-700 text-neutral-300 hover:text-white"
-              }`}
-              title="Toggle whether participants can play/pause/seek"
-            >
-              {room.controlsLocked ? (
-                <>
-                  <Lock className="w-3.5 h-3.5 text-rose-400" />
-                  <span>Controls: Host Only</span>
-                </>
-              ) : (
-                <>
-                  <Unlock className="w-3.5 h-3.5 text-neutral-400" />
-                  <span>Controls: Open</span>
-                </>
-              )}
-            </button>
-          ) : (
-            <div className="flex items-center gap-1.5 text-xs text-neutral-400 px-2 py-1 rounded-lg bg-neutral-950">
-              {room.controlsLocked ? (
-                <>
-                  <Lock className="w-3.5 h-3.5 text-amber-400" />
-                  <span className="text-[11px]">Host Controls Locked</span>
-                </>
-              ) : (
-                <>
-                  <Unlock className="w-3.5 h-3.5 text-emerald-400" />
-                  <span className="text-[11px]">Controls Open</span>
-                </>
+          {/* Center/Right: Movie Title & Host Controls */}
+          <div className="flex items-center gap-2.5 sm:gap-4 flex-wrap">
+            <div className="flex items-center gap-2">
+              <span className="text-xs font-bold text-white truncate max-w-[160px] sm:max-w-xs">
+                {room.movieTitle}
+              </span>
+              {isOfflineSource && (
+                <span className="px-2 py-0.5 rounded-full text-[10px] font-semibold bg-amber-500/15 text-amber-400 border border-amber-500/30">
+                  Offline Video
+                </span>
               )}
             </div>
-          )}
 
-          {/* Online count */}
-          <div className="flex items-center gap-1.5 text-xs text-neutral-300 bg-neutral-950 px-2.5 py-1.5 rounded-xl border border-neutral-800">
-            <Users className="w-3.5 h-3.5 text-rose-500" />
-            <span>{activeParticipantsCount} online</span>
+            {/* Change Media Option */}
+            <button
+              onClick={() => setIsChangeMediaOpen(true)}
+              className="flex items-center gap-1.5 px-3 py-1.5 rounded-xl text-xs font-semibold bg-neutral-800 hover:bg-neutral-750 text-neutral-200 hover:text-white border border-neutral-700 transition shadow-sm hover:border-rose-500/50"
+              title="Change Media Source (Search, MP4 URL, Offline Video)"
+            >
+              <RefreshCw className="w-3.5 h-3.5 text-rose-400" />
+              <span>Change Media</span>
+            </button>
+
+            {/* Host Admin Controls Lock Toggle */}
+            {isHost ? (
+              <button
+                onClick={handleToggleControlLock}
+                className={`flex items-center gap-1.5 px-3 py-1.5 rounded-xl text-xs font-semibold transition border ${
+                  room.controlsLocked
+                    ? "bg-rose-500/15 border-rose-500 text-rose-300"
+                    : "bg-neutral-800 border-neutral-700 text-neutral-300 hover:text-white"
+                }`}
+                title="Toggle whether participants can play/pause/seek"
+              >
+                {room.controlsLocked ? (
+                  <>
+                    <Lock className="w-3.5 h-3.5 text-rose-400" />
+                    <span>Controls: Host Only</span>
+                  </>
+                ) : (
+                  <>
+                    <Unlock className="w-3.5 h-3.5 text-neutral-400" />
+                    <span>Controls: Open</span>
+                  </>
+                )}
+              </button>
+            ) : (
+              <div className="flex items-center gap-1.5 text-xs text-neutral-400 px-2 py-1 rounded-lg bg-neutral-950">
+                {room.controlsLocked ? (
+                  <>
+                    <Lock className="w-3.5 h-3.5 text-amber-400" />
+                    <span className="text-[11px]">Host Controls Locked</span>
+                  </>
+                ) : (
+                  <>
+                    <Unlock className="w-3.5 h-3.5 text-emerald-400" />
+                    <span className="text-[11px]">Controls Open</span>
+                  </>
+                )}
+              </div>
+            )}
+
+            {/* Online count */}
+            <div className="flex items-center gap-1.5 text-xs text-neutral-300 bg-neutral-950 px-2.5 py-1.5 rounded-xl border border-neutral-800">
+              <Users className="w-3.5 h-3.5 text-rose-500" />
+              <span>{activeParticipantsCount} online</span>
+            </div>
           </div>
         </div>
-      </div>
+      </header>
 
       {/* Offline Video Prompt for Participants */}
       {isOfflineSource && !localVideoUrl && (
@@ -501,39 +549,49 @@ export function WatchRoom({ roomCode, initialOfflineFile, onLeaveRoom }: WatchRo
       )}
 
       {/* Main Watch Room Grid: Video Player (Left) + Chat / Participants (Right) */}
-      <div className="grid grid-cols-1 lg:grid-cols-12 gap-4">
+      <div className="grid grid-cols-1 lg:grid-cols-12 gap-4 items-start">
         {/* Video Player Column */}
         <div className="lg:col-span-8 space-y-4">
-          {effectiveVideoSrc ? (
-            <VideoPlayer
-              src={effectiveVideoSrc}
-              poster={room.moviePoster}
-              isHost={isHost}
-              controlsLocked={room.controlsLocked}
-              syncState={room.playbackState}
-              onPlaybackChange={handlePlaybackChange}
-              onAudioTrackChange={handleAudioTrackChange}
-              onVideoEnded={handleVideoEnded}
-              roomCode={roomCode}
-              currentUserId={user?.uid}
-              isVoiceRecording={isVoiceRecording}
-            />
-          ) : (
-            <div className="w-full aspect-video bg-neutral-900/90 border border-neutral-800 rounded-2xl flex flex-col items-center justify-center p-6 text-center">
-              <HardDrive className="w-12 h-12 text-neutral-600 mb-3" />
-              <h4 className="text-base font-bold text-white">Offline Video Needed</h4>
-              <p className="text-xs text-neutral-400 max-w-md mt-1 mb-4">
-                Please select your local copy of "{room.offlineFileName || room.movieTitle}" using the button above to begin playback.
-              </p>
-              <button
-                onClick={() => setIsChangeMediaOpen(true)}
-                className="px-4 py-2 bg-neutral-800 hover:bg-neutral-700 text-rose-400 text-xs font-semibold rounded-xl border border-neutral-700 transition flex items-center gap-1.5"
-              >
-                <RefreshCw className="w-3.5 h-3.5" />
-                <span>Or Switch to Another Media</span>
-              </button>
-            </div>
-          )}
+          {/* Sticky Video Player Container with High Z-Index (z-9999) */}
+          <div
+            ref={playerWrapperRef}
+            className="sticky rounded-2xl transition-all"
+            style={{
+              zIndex: 9999,
+              top: `calc(${headerHeight}px + 0.5rem)`
+            }}
+          >
+            {effectiveVideoSrc ? (
+              <VideoPlayer
+                src={effectiveVideoSrc}
+                poster={room.moviePoster}
+                isHost={isHost}
+                controlsLocked={room.controlsLocked}
+                syncState={room.playbackState}
+                onPlaybackChange={handlePlaybackChange}
+                onAudioTrackChange={handleAudioTrackChange}
+                onVideoEnded={handleVideoEnded}
+                roomCode={roomCode}
+                currentUserId={user?.uid}
+                isVoiceRecording={isVoiceRecording}
+              />
+            ) : (
+              <div className="w-full aspect-video bg-neutral-900/90 border border-neutral-800 rounded-2xl flex flex-col items-center justify-center p-6 text-center">
+                <HardDrive className="w-12 h-12 text-neutral-600 mb-3" />
+                <h4 className="text-base font-bold text-white">Offline Video Needed</h4>
+                <p className="text-xs text-neutral-400 max-w-md mt-1 mb-4">
+                  Please select your local copy of "{room.offlineFileName || room.movieTitle}" using the button above to begin playback.
+                </p>
+                <button
+                  onClick={() => setIsChangeMediaOpen(true)}
+                  className="px-4 py-2 bg-neutral-800 hover:bg-neutral-700 text-rose-400 text-xs font-semibold rounded-xl border border-neutral-700 transition flex items-center gap-1.5"
+                >
+                  <RefreshCw className="w-3.5 h-3.5" />
+                  <span>Or Switch to Another Media</span>
+                </button>
+              </div>
+            )}
+          </div>
 
           {/* Room Details Accordion / Info Card */}
           <div className="p-4 bg-neutral-900/80 border border-neutral-800 rounded-2xl backdrop-blur-sm flex flex-wrap items-center justify-between gap-3 text-xs">
@@ -566,7 +624,7 @@ export function WatchRoom({ roomCode, initialOfflineFile, onLeaveRoom }: WatchRo
         </div>
 
         {/* Chat & Participants Column */}
-        <div className="lg:col-span-4 flex flex-col h-[520px] lg:h-auto min-h-[480px]">
+        <div className="lg:col-span-4 flex flex-col h-[520px] lg:h-[calc(100vh-var(--room-header-height,80px)-2rem)] lg:max-h-[750px] min-h-[480px]">
           {/* Tabs for Mobile/Desktop */}
           <div className="flex items-center gap-1 p-1 bg-neutral-950 rounded-xl border border-neutral-800 mb-2">
             <button

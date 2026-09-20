@@ -94,7 +94,7 @@ export function ProfileModal({ isOpen, onClose }: ProfileModalProps) {
   const initials = profile.username ? profile.username.slice(0, 2).toUpperCase() : "MD";
 
   return (
-    <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/80 backdrop-blur-sm animate-in fade-in duration-200 overflow-y-auto">
+    <div className="fixed inset-0 z-[20000] flex items-center justify-center p-4 bg-black/80 backdrop-blur-sm animate-in fade-in duration-200 overflow-y-auto">
       <div className="w-full max-w-md bg-neutral-900 border border-neutral-800 rounded-3xl p-6 shadow-2xl relative my-auto">
         <button
           onClick={onClose}

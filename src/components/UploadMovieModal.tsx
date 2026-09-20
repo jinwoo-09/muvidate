@@ -324,7 +324,7 @@ export function UploadMovieModal({ isOpen, onClose, onMovieAdded }: UploadMovieM
   );
 
   return (
-    <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/85 backdrop-blur-md overflow-y-auto">
+    <div className="fixed inset-0 z-[20000] flex items-center justify-center p-4 bg-black/85 backdrop-blur-md overflow-y-auto">
       <div className="w-full max-w-2xl bg-neutral-900 border border-neutral-800 rounded-2xl p-6 sm:p-8 shadow-2xl relative my-8">
         <button
           onClick={onClose}
