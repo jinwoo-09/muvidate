@@ -23,7 +23,8 @@ import {
   Flame,
   Instagram,
   Smartphone,
-  Download
+  Download,
+  Loader2
 } from "lucide-react";
 
 function MainContent() {

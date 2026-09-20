@@ -8,7 +8,9 @@ import {
   createUserWithEmailAndPassword,
   linkWithCredential,
   EmailAuthProvider,
-  updatePassword
+  updatePassword,
+  setPersistence,
+  browserLocalPersistence
 } from "firebase/auth";
 import { 
   getFirestore, 
@@ -52,6 +54,14 @@ export const firebaseConfig = {
 // Initialize Firebase once
 export const app = getApps().length === 0 ? initializeApp(firebaseConfig) : getApp();
 export const auth = getAuth(app);
+
+// Explicitly ensure browser local persistence so sessions survive page refreshes and tabs
+if (typeof window !== "undefined") {
+  setPersistence(auth, browserLocalPersistence).catch((err) => {
+    console.warn("Firebase Auth browserLocalPersistence setup notice:", err);
+  });
+}
+
 export const firestore = getFirestore(app);
 export const rtdb = getDatabase(app, firebaseConfig.databaseURL);
 

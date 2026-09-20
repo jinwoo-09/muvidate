@@ -4,7 +4,7 @@ import { isUsernameTaken } from "../lib/firebase";
 import { Film, User, CheckCircle, AlertCircle, Loader2, KeyRound, Eye, EyeOff, LogIn, UserPlus } from "lucide-react";
 
 export function UsernameSetupModal() {
-  const { needsUsernameSetup, saveUsername, loginUser, user } = useAuth();
+  const { needsUsernameSetup, saveUsername, loginUser, user, loading } = useAuth();
   const [mode, setMode] = useState<"register" | "login">("register");
   const [username, setUsername] = useState("");
   const [password, setPassword] = useState("");
@@ -13,7 +13,7 @@ export function UsernameSetupModal() {
   const [isSubmitting, setIsSubmitting] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
-  if (!needsUsernameSetup) return null;
+  if (loading || !needsUsernameSetup) return null;
 
   const validateUsername = (val: string): string | null => {
     const trimmed = val.trim();

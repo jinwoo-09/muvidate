@@ -32,45 +32,32 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
   const [needsUsernameSetup, setNeedsUsernameSetup] = useState<boolean>(false);
 
   useEffect(() => {
-    let unsubscribe: () => void;
-
-    async function initAuthFlow() {
-      try {
-        // Automatically sign in anonymously if not signed in
-        await ensureAnonymousAuth();
-
-        unsubscribe = onAuthStateChanged(auth, async (currentUser) => {
-          setUser(currentUser);
-          if (currentUser) {
-            try {
-              const userProf = await getUserProfile(currentUser.uid);
-              if (userProf && userProf.username) {
-                setProfile(userProf);
-                setNeedsUsernameSetup(false);
-              } else {
-                setProfile(null);
-                setNeedsUsernameSetup(true);
-              }
-            } catch (err) {
-              console.error("Error reading user profile:", err);
-              setNeedsUsernameSetup(true);
-            }
+    // onAuthStateChanged waits for Firebase Auth to restore any persisted session from IndexedDB/localStorage
+    const unsubscribe = onAuthStateChanged(auth, async (currentUser) => {
+      setUser(currentUser);
+      if (currentUser) {
+        try {
+          const userProf = await getUserProfile(currentUser.uid);
+          if (userProf && userProf.username) {
+            setProfile(userProf);
+            setNeedsUsernameSetup(false);
           } else {
             setProfile(null);
-            setNeedsUsernameSetup(false);
+            setNeedsUsernameSetup(true);
           }
-          setLoading(false);
-        });
-      } catch (err) {
-        console.error("Auth init error:", err);
-        setLoading(false);
+        } catch (err) {
+          console.error("Error reading user profile:", err);
+          setNeedsUsernameSetup(true);
+        }
+      } else {
+        setProfile(null);
+        setNeedsUsernameSetup(true);
       }
-    }
-
-    initAuthFlow();
+      setLoading(false);
+    });
 
     return () => {
-      if (unsubscribe) unsubscribe();
+      unsubscribe();
     };
   }, []);
 
