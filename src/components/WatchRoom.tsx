@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useRef } from "react";
+import React, { useState, useEffect, useRef, useCallback, useMemo } from "react";
 import { useAuth } from "../context/AuthContext";
 import { rtdb } from "../lib/firebase";
 import { ref, onValue, off, update, set } from "firebase/database";
@@ -77,7 +77,53 @@ export function WatchRoom({ roomCode, initialOfflineFile, onLeaveRoom }: WatchRo
         return;
       }
 
-      setRoom(data);
+      setRoom((prev) => {
+        if (!prev) return data;
+
+        // Isolate chat changes: WatchRoom does not render data.chat directly
+        // Chat is handled independently in RoomChat.tsx and VideoPlayer's fullscreen overlay
+        const isPlaybackIdentical =
+          prev.playbackState?.lastUpdated === data.playbackState?.lastUpdated &&
+          prev.playbackState?.isPlaying === data.playbackState?.isPlaying &&
+          prev.playbackState?.currentTime === data.playbackState?.currentTime &&
+          prev.playbackState?.audioTrackIndex === data.playbackState?.audioTrackIndex &&
+          prev.playbackState?.updatedBy === data.playbackState?.updatedBy;
+
+        const isMetadataIdentical =
+          prev.adminUid === data.adminUid &&
+          prev.movieTitle === data.movieTitle &&
+          prev.moviePoster === data.moviePoster &&
+          prev.movieUrl === data.movieUrl &&
+          prev.movieSource === data.movieSource &&
+          prev.offlineFileName === data.offlineFileName &&
+          prev.movieCompleted === data.movieCompleted &&
+          prev.controlsLocked === data.controlsLocked &&
+          prev.expiresAt === data.expiresAt;
+
+        // Compare participants active count
+        const prevParticipants = prev.participants || {};
+        const newParticipants = data.participants || {};
+        const prevKeys = Object.keys(prevParticipants);
+        const newKeys = Object.keys(newParticipants);
+        const isParticipantsIdentical =
+          prevKeys.length === newKeys.length &&
+          prevKeys.every((k) => prevParticipants[k]?.isOnline === newParticipants[k]?.isOnline);
+
+        // If only chat or internal noise changed, keep previous reference to prevent re-renders
+        if (isPlaybackIdentical && isMetadataIdentical && isParticipantsIdentical) {
+          return prev;
+        }
+
+        // Preserve playbackState object reference if playback did not change
+        if (isPlaybackIdentical) {
+          return {
+            ...data,
+            playbackState: prev.playbackState
+          };
+        }
+
+        return data;
+      });
     };
 
     onValue(roomRef, handleRoomData);
@@ -105,7 +151,7 @@ export function WatchRoom({ roomCode, initialOfflineFile, onLeaveRoom }: WatchRo
   const isHost = user?.uid === room?.adminUid;
 
   // Sync state emitter from VideoPlayer
-  const handlePlaybackChange = (state: { isPlaying: boolean; currentTime: number }) => {
+  const handlePlaybackChange = useCallback((state: { isPlaying: boolean; currentTime: number }) => {
     if (!room || !user || !profile) return;
     if (room.controlsLocked && !isHost) return;
 
@@ -121,10 +167,10 @@ export function WatchRoom({ roomCode, initialOfflineFile, onLeaveRoom }: WatchRo
       updatedBy: user.uid,
       updatedByUsername: profile.username
     }).catch(console.error);
-  };
+  }, [room?.controlsLocked, isHost, roomCode, user, profile]);
 
   // Audio track sync
-  const handleAudioTrackChange = (index: number) => {
+  const handleAudioTrackChange = useCallback((index: number) => {
     if (!room || !user || !profile) return;
     if (room.controlsLocked && !isHost) return;
 
@@ -135,7 +181,7 @@ export function WatchRoom({ roomCode, initialOfflineFile, onLeaveRoom }: WatchRo
       updatedBy: user.uid,
       updatedByUsername: profile.username
     }).catch(console.error);
-  };
+  }, [room?.controlsLocked, isHost, roomCode, user, profile]);
 
   // Admin toggling control lock
   const handleToggleControlLock = async () => {
@@ -147,8 +193,8 @@ export function WatchRoom({ roomCode, initialOfflineFile, onLeaveRoom }: WatchRo
   };
 
   // Handle movie natural completion
-  const handleVideoEnded = async () => {
-    if (!room) return;
+  const handleVideoEnded = useCallback(async () => {
+    if (!roomCode) return;
     try {
       // 1. Mark movie as completed
       const roomRef = ref(rtdb, `rooms/${roomCode}`);
@@ -163,7 +209,7 @@ export function WatchRoom({ roomCode, initialOfflineFile, onLeaveRoom }: WatchRo
     } catch (err) {
       console.error("Error finalizing completed movie:", err);
     }
-  };
+  }, [roomCode]);
 
   // Replay movie option for host
   const handleReplayMovie = async () => {
@@ -249,9 +295,12 @@ export function WatchRoom({ roomCode, initialOfflineFile, onLeaveRoom }: WatchRo
     );
   }
 
-  // Determine video playback source
+  // Determine video playback source with memoization to prevent unnecessary string/reference recreation
   const isOfflineSource = room.movieSource === "offline";
-  const effectiveVideoSrc = isOfflineSource ? localVideoUrl : room.movieUrl;
+  const effectiveVideoSrc = useMemo(() => {
+    if (!room) return "";
+    return room.movieSource === "offline" ? (localVideoUrl || "") : (room.movieUrl || "");
+  }, [room?.movieSource, room?.movieUrl, localVideoUrl]);
 
   const participantsList = room.participants ? Object.values(room.participants) : [];
   const activeParticipantsCount = participantsList.filter((p) => p.isOnline).length;

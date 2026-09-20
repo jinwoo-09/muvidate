@@ -1,7 +1,7 @@
 import React, { useState, useRef } from "react";
 import { useAuth } from "../context/AuthContext";
 import { uploadFileToWorker } from "../lib/workerApi";
-import { X, Camera, Loader2, AlertCircle, CheckCircle, Copy, User } from "lucide-react";
+import { X, Camera, Loader2, AlertCircle, CheckCircle, Copy, User, Instagram } from "lucide-react";
 
 interface ProfileModalProps {
   isOpen: boolean;
@@ -145,6 +145,34 @@ export function ProfileModal({ isOpen, onClose }: ProfileModalProps) {
                 {copied ? <CheckCircle className="w-4 h-4 text-emerald-400" /> : <Copy className="w-4 h-4" />}
               </button>
             </div>
+          </div>
+        </div>
+
+        {/* Developer Attribution */}
+        <div className="bg-neutral-950/80 rounded-xl p-4 border border-neutral-800/80 space-y-2">
+          <span className="text-[11px] uppercase tracking-wider text-neutral-400 font-semibold block">
+            Developer Info
+          </span>
+          <div className="flex items-center justify-between gap-3">
+            <div className="flex items-center gap-2.5">
+              <div className="w-8 h-8 rounded-lg bg-rose-500/10 border border-rose-500/25 flex items-center justify-center text-rose-400">
+                <Instagram className="w-4 h-4" />
+              </div>
+              <div>
+                <p className="text-xs font-semibold text-white">Developer: Ashuuxoo</p>
+                <p className="text-[11px] text-neutral-400">Creator of MuviDate</p>
+              </div>
+            </div>
+            <a
+              href="https://www.instagram.com/ashuuxoo"
+              target="_blank"
+              rel="noopener noreferrer"
+              className="inline-flex items-center gap-1.5 px-3 py-1.5 bg-gradient-to-r from-rose-600 to-pink-600 hover:from-rose-500 hover:to-pink-500 text-white rounded-lg text-xs font-medium transition shadow-sm shrink-0"
+              title="Visit Instagram: @ashuuxoo"
+            >
+              <Instagram className="w-3.5 h-3.5" />
+              <span>@ashuuxoo</span>
+            </a>
           </div>
         </div>
 

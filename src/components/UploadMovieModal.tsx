@@ -12,7 +12,8 @@ import {
   FileVideo,
   ChevronDown,
   Check,
-  Search
+  Search,
+  Link as LinkIcon
 } from "lucide-react";
 
 interface UploadMovieModalProps {
@@ -61,7 +62,9 @@ export function UploadMovieModal({ isOpen, onClose, onMovieAdded }: UploadMovieM
   const [posterMode, setPosterMode] = useState<"upload" | "url">("upload");
   const [posterUrl, setPosterUrl] = useState("");
   const [posterFile, setPosterFile] = useState<File | null>(null);
+  const [movieSourceMode, setMovieSourceMode] = useState<"file" | "url">("file");
   const [movieFile, setMovieFile] = useState<File | null>(null);
+  const [movieUrlInput, setMovieUrlInput] = useState("");
 
   const [isUploading, setIsUploading] = useState(false);
   const [uploadStep, setUploadStep] = useState<string>("");
@@ -96,6 +99,20 @@ export function UploadMovieModal({ isOpen, onClose, onMovieAdded }: UploadMovieM
   const handleRemoveGenre = (g: string, e?: React.MouseEvent) => {
     if (e) e.stopPropagation();
     setSelectedGenres(selectedGenres.filter((item) => item !== g));
+  };
+
+  const handleSelectMovieSourceMode = (mode: "file" | "url") => {
+    if (isUploading) return;
+    setMovieSourceMode(mode);
+    setError(null);
+    if (mode === "file") {
+      // Switching to file clears URL to avoid ambiguity
+      setMovieUrlInput("");
+    } else {
+      // Switching to URL clears file to avoid ambiguity
+      setMovieFile(null);
+      if (movieInputRef.current) movieInputRef.current.value = "";
+    }
   };
 
   const handleMovieFileSelect = (e: React.ChangeEvent<HTMLInputElement>) => {
@@ -186,14 +203,60 @@ export function UploadMovieModal({ isOpen, onClose, onMovieAdded }: UploadMovieM
       setError("Poster URL is mandatory.");
       return;
     }
-    if (!movieFile) {
-      setError("MP4 Video file is mandatory.");
-      return;
-    }
 
-    // Double check MP4 and 1 GB file size strictly before starting Worker upload
-    if (!movieFile.name.toLowerCase().endsWith(".mp4") || movieFile.size > MAX_MOVIE_SIZE) {
-      setError("Movie file must be MP4 and no larger than 1 GB.");
+    // Validate movie source: Exactly ONE must be supplied
+    if (movieSourceMode === "file") {
+      if (!movieFile) {
+        setError("MP4 Video file is mandatory when 'Upload MP4 File' is selected.");
+        return;
+      }
+      if (movieUrlInput.trim()) {
+        setError("Only ONE movie source can be selected. Please clear the URL or choose 'MP4 URL'.");
+        return;
+      }
+      // Double check MP4 and 1 GB file size strictly before starting Worker upload
+      if (!movieFile.name.toLowerCase().endsWith(".mp4") || movieFile.size > MAX_MOVIE_SIZE) {
+        setError("Movie file must be MP4 and no larger than 1 GB.");
+        return;
+      }
+    } else if (movieSourceMode === "url") {
+      const trimmedUrl = movieUrlInput.trim();
+      if (!trimmedUrl) {
+        setError("MP4 Video URL is mandatory when 'MP4 URL' option is selected.");
+        return;
+      }
+      if (movieFile) {
+        setError("Only ONE movie source can be selected. Please clear the uploaded file or choose 'Upload MP4 File'.");
+        return;
+      }
+      let parsedUrl: URL;
+      try {
+        parsedUrl = new URL(trimmedUrl);
+        if (!["http:", "https:"].includes(parsedUrl.protocol)) {
+          throw new Error("Invalid protocol");
+        }
+      } catch {
+        setError("Please enter a valid HTTP or HTTPS video URL (e.g. https://example.com/movie.mp4).");
+        return;
+      }
+
+      // Check for expected MP4 usage
+      const lowerPath = parsedUrl.pathname.toLowerCase();
+      const lowerSearch = parsedUrl.search.toLowerCase();
+      const isLikelyMp4 =
+        lowerPath.endsWith(".mp4") ||
+        lowerPath.includes(".mp4") ||
+        lowerSearch.includes(".mp4") ||
+        lowerPath.includes("video") ||
+        lowerPath.includes("mp4") ||
+        lowerPath.includes("stream");
+
+      if (!isLikelyMp4) {
+        setError("The provided URL does not appear to reference an MP4 video resource. Please ensure it points directly to an MP4 video.");
+        return;
+      }
+    } else {
+      setError("Please select a movie source (Upload MP4 File or MP4 URL).");
       return;
     }
 
@@ -206,9 +269,15 @@ export function UploadMovieModal({ isOpen, onClose, onMovieAdded }: UploadMovieM
         finalPosterUrl = await uploadFileToWorker(posterFile, posterFile.name);
       }
 
-      // 2. Upload MP4 Movie File
-      setUploadStep(`Uploading MP4 movie "${movieFile.name}" (${(movieFile.size / (1024 * 1024)).toFixed(1)} MB)...`);
-      const finalMovieUrl = await uploadFileToWorker(movieFile, movieFile.name);
+      // 2. Obtain Movie URL (Worker upload for file, or direct URL)
+      let finalMovieUrl = "";
+      if (movieSourceMode === "file") {
+        setUploadStep(`Uploading MP4 movie "${movieFile!.name}" (${(movieFile!.size / (1024 * 1024)).toFixed(1)} MB)...`);
+        finalMovieUrl = await uploadFileToWorker(movieFile!, movieFile!.name);
+      } else {
+        // Option B: MP4 URL - stored directly in existing `url` field without Worker upload
+        finalMovieUrl = movieUrlInput.trim();
+      }
 
       // 3. Save into Firestore `movie` collection with comma-separated genres for complete compatibility
       setUploadStep("Saving movie metadata into Firestore...");
@@ -278,56 +347,132 @@ export function UploadMovieModal({ isOpen, onClose, onMovieAdded }: UploadMovieM
         )}
 
         <form onSubmit={handleSubmit} className="space-y-5">
-          {/* MP4 Movie Upload Field */}
-          <div className="p-4 bg-neutral-950/80 rounded-xl border border-neutral-800">
-            <div className="flex items-center justify-between mb-2">
-              <label className="text-xs font-semibold uppercase tracking-wider text-rose-400 flex items-center gap-1.5">
-                <FileVideo className="w-4 h-4" /> MP4 Video File (Mandatory)
-              </label>
-              <span className="text-[11px] text-neutral-400">Worker Upload • .mp4 only • Max 1 GB</span>
-            </div>
+          {/* Movie Source Selection: Exactly ONE option (Upload MP4 File OR MP4 URL) */}
+          <div className="p-4 bg-neutral-950/80 rounded-xl border border-neutral-800 space-y-3">
+            <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-2.5">
+              <div>
+                <label className="text-xs font-semibold uppercase tracking-wider text-rose-400 flex items-center gap-1.5">
+                  <FileVideo className="w-4 h-4" /> Movie Source * (Choose ONE)
+                </label>
+                <p className="text-[11px] text-neutral-400 mt-0.5">
+                  Provide your movie as an uploaded MP4 file or via a direct MP4 URL
+                </p>
+              </div>
 
-            <input
-              ref={movieInputRef}
-              type="file"
-              accept=".mp4,video/mp4"
-              className="hidden"
-              onChange={handleMovieFileSelect}
-              disabled={isUploading}
-            />
-
-            {movieFile ? (
-              <div className="flex items-center justify-between p-3 bg-neutral-900 border border-neutral-700 rounded-lg">
-                <div className="flex items-center gap-3 overflow-hidden">
-                  <FileVideo className="w-5 h-5 text-rose-400 shrink-0" />
-                  <div className="truncate">
-                    <p className="text-sm font-medium text-white truncate">{movieFile.name}</p>
-                    <p className="text-xs text-neutral-400">
-                      {(movieFile.size / (1024 * 1024)).toFixed(2)} MB • MP4
-                    </p>
-                  </div>
-                </div>
+              {/* Segmented Toggle Control */}
+              <div className="inline-flex p-1 bg-neutral-900 border border-neutral-800 rounded-xl self-start sm:self-auto">
                 <button
                   type="button"
-                  onClick={() => {
-                    setMovieFile(null);
-                    if (movieInputRef.current) movieInputRef.current.value = "";
-                  }}
+                  onClick={() => handleSelectMovieSourceMode("file")}
                   disabled={isUploading}
-                  className="text-xs text-neutral-400 hover:text-rose-400 px-2.5 py-1 rounded hover:bg-neutral-800 transition"
+                  className={`px-3 py-1.5 rounded-lg text-xs font-semibold transition flex items-center gap-1.5 ${
+                    movieSourceMode === "file"
+                      ? "bg-rose-600 text-white shadow-sm"
+                      : "text-neutral-400 hover:text-white"
+                  }`}
                 >
-                  Change
+                  <UploadCloud className="w-3.5 h-3.5" />
+                  <span>Upload MP4 File</span>
+                </button>
+                <button
+                  type="button"
+                  onClick={() => handleSelectMovieSourceMode("url")}
+                  disabled={isUploading}
+                  className={`px-3 py-1.5 rounded-lg text-xs font-semibold transition flex items-center gap-1.5 ${
+                    movieSourceMode === "url"
+                      ? "bg-rose-600 text-white shadow-sm"
+                      : "text-neutral-400 hover:text-white"
+                  }`}
+                >
+                  <LinkIcon className="w-3.5 h-3.5" />
+                  <span>MP4 URL</span>
                 </button>
               </div>
-            ) : (
-              <div
-                onClick={() => movieInputRef.current?.click()}
-                className="border-2 border-dashed border-neutral-700 hover:border-rose-500/50 rounded-xl p-6 text-center cursor-pointer transition bg-neutral-900/40 hover:bg-neutral-900"
-              >
-                <UploadCloud className="w-8 h-8 text-neutral-400 mx-auto mb-2" />
-                <p className="text-sm font-medium text-white">Click or drag MP4 video here</p>
-                <p className="text-xs text-neutral-400 mt-1">
-                  Required: File must be .mp4 and no larger than 1 GB
+            </div>
+
+            {/* OPTION A: Upload MP4 File */}
+            {movieSourceMode === "file" && (
+              <div className="space-y-2 pt-1">
+                <span className="text-[11px] text-neutral-400 block">Worker Upload • .mp4 only • Max 1 GB</span>
+                <input
+                  ref={movieInputRef}
+                  type="file"
+                  accept=".mp4,video/mp4"
+                  className="hidden"
+                  onChange={handleMovieFileSelect}
+                  disabled={isUploading}
+                />
+
+                {movieFile ? (
+                  <div className="flex items-center justify-between p-3 bg-neutral-900 border border-neutral-700 rounded-lg">
+                    <div className="flex items-center gap-3 overflow-hidden">
+                      <FileVideo className="w-5 h-5 text-rose-400 shrink-0" />
+                      <div className="truncate">
+                        <p className="text-sm font-medium text-white truncate">{movieFile.name}</p>
+                        <p className="text-xs text-neutral-400">
+                          {(movieFile.size / (1024 * 1024)).toFixed(2)} MB • MP4
+                        </p>
+                      </div>
+                    </div>
+                    <button
+                      type="button"
+                      onClick={() => {
+                        setMovieFile(null);
+                        if (movieInputRef.current) movieInputRef.current.value = "";
+                      }}
+                      disabled={isUploading}
+                      className="text-xs text-neutral-400 hover:text-rose-400 px-2.5 py-1 rounded hover:bg-neutral-800 transition"
+                    >
+                      Change
+                    </button>
+                  </div>
+                ) : (
+                  <div
+                    onClick={() => movieInputRef.current?.click()}
+                    className="border-2 border-dashed border-neutral-700 hover:border-rose-500/50 rounded-xl p-6 text-center cursor-pointer transition bg-neutral-900/40 hover:bg-neutral-900"
+                  >
+                    <UploadCloud className="w-8 h-8 text-neutral-400 mx-auto mb-2" />
+                    <p className="text-sm font-medium text-white">Click to select MP4 movie file</p>
+                    <p className="text-xs text-neutral-400 mt-1">
+                      Required: File must be .mp4 and no larger than 1 GB
+                    </p>
+                  </div>
+                )}
+              </div>
+            )}
+
+            {/* OPTION B: MP4 URL */}
+            {movieSourceMode === "url" && (
+              <div className="space-y-2 pt-1">
+                <span className="text-[11px] text-neutral-400 block">
+                  Direct Video URL • Direct HTTP/HTTPS link to an MP4 video resource
+                </span>
+                <div className="relative">
+                  <input
+                    type="url"
+                    value={movieUrlInput}
+                    onChange={(e) => {
+                      setMovieUrlInput(e.target.value);
+                      setError(null);
+                    }}
+                    placeholder="https://example.com/videos/movie.mp4"
+                    disabled={isUploading}
+                    className="w-full pl-3.5 pr-10 py-2.5 bg-neutral-900 border border-neutral-700 rounded-xl text-white placeholder-neutral-500 focus:outline-none focus:ring-2 focus:ring-rose-500 text-sm"
+                  />
+                  {movieUrlInput && (
+                    <button
+                      type="button"
+                      onClick={() => setMovieUrlInput("")}
+                      disabled={isUploading}
+                      className="absolute right-3 top-1/2 -translate-y-1/2 text-neutral-400 hover:text-white"
+                      title="Clear URL"
+                    >
+                      <X className="w-4 h-4" />
+                    </button>
+                  )}
+                </div>
+                <p className="text-[11px] text-neutral-400">
+                  Remote video URL will be streamed directly in the video player without uploading through the Worker.
                 </p>
               </div>
             )}

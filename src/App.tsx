@@ -20,7 +20,8 @@ import {
   Clapperboard, 
   Search, 
   SlidersHorizontal,
-  Flame
+  Flame,
+  Instagram
 } from "lucide-react";
 
 function MainContent() {
@@ -352,9 +353,24 @@ function MainContent() {
 
       {/* Footer */}
       <footer className="mt-auto border-t border-neutral-900 bg-neutral-950 py-6 text-center text-xs text-neutral-500">
-        <div className="max-w-7xl mx-auto px-4 flex flex-col sm:flex-row items-center justify-between gap-3">
-          <p>© {new Date().getFullYear()} MuviDate • Watch Together In Sync</p>
-          <div className="flex items-center gap-4 text-neutral-400">
+        <div className="max-w-7xl mx-auto px-4 flex flex-col sm:flex-row items-center justify-between gap-4">
+          <div className="flex flex-col sm:flex-row items-center gap-2 sm:gap-4">
+            <p>© {new Date().getFullYear()} MuviDate • Watch Together In Sync</p>
+            <span className="hidden sm:inline text-neutral-750">•</span>
+            {/* Developer Instagram Link */}
+            <a
+              href="https://www.instagram.com/ashuuxoo"
+              target="_blank"
+              rel="noopener noreferrer"
+              className="inline-flex items-center gap-1.5 px-3 py-1 rounded-full bg-neutral-900 hover:bg-neutral-850 text-neutral-300 hover:text-rose-400 border border-neutral-800 hover:border-rose-500/40 transition shadow-sm group"
+              title="Visit Developer's Instagram: Ashuuxoo"
+            >
+              <Instagram className="w-3.5 h-3.5 text-rose-500 group-hover:scale-110 transition-transform" />
+              <span>Developer: <strong className="text-white font-medium group-hover:text-rose-400">Ashuuxoo</strong></span>
+            </a>
+          </div>
+
+          <div className="flex items-center gap-3 text-neutral-400">
             <span>Powered by Firebase RTDB & Firestore</span>
             <span>•</span>
             <span>Worker API Uploads</span>

@@ -37,7 +37,7 @@ export interface VideoPlayerProps {
   currentUserId?: string;
 }
 
-export function VideoPlayer({
+function VideoPlayerComponent({
   src,
   poster,
   isHost,
@@ -82,6 +82,15 @@ export function VideoPlayer({
   const controlsTimeoutRef = useRef<number | null>(null);
   const isSeekingRef = useRef(false);
   const lastEmittedState = useRef<{ isPlaying: boolean; currentTime: number } | null>(null);
+  const lastSyncProcessedRef = useRef<{
+    lastUpdated: number;
+    isPlaying: boolean;
+    currentTime: number;
+    audioTrackIndex?: number;
+  } | null>(null);
+
+  const onVideoEndedRef = useRef(onVideoEnded);
+  onVideoEndedRef.current = onVideoEnded;
 
   const canControl = isHost || !controlsLocked;
 
@@ -105,6 +114,9 @@ export function VideoPlayer({
     }
   }, [canControl, isFullscreen, isPlaying]);
 
+  const resetControlsTimeoutRef = useRef(resetControlsTimeout);
+  resetControlsTimeoutRef.current = resetControlsTimeout;
+
   // Audio Tracks Detection (where browser supports HTML5 audioTracks API)
   const detectAudioTracks = useCallback(() => {
     const video = videoRef.current as any;
@@ -126,16 +138,54 @@ export function VideoPlayer({
     }
   }, []);
 
+  const detectAudioTracksRef = useRef(detectAudioTracks);
+  detectAudioTracksRef.current = detectAudioTracks;
+
   // Handle incoming remote syncState changes
   useEffect(() => {
     const video = videoRef.current;
     if (!video || !syncState) return;
 
-    // Check drift tolerance (1.5 seconds)
-    const timeDiff = Math.abs(video.currentTime - syncState.currentTime);
+    // Skip if this exact sync update has already been processed
+    if (
+      lastSyncProcessedRef.current &&
+      lastSyncProcessedRef.current.lastUpdated === syncState.lastUpdated
+    ) {
+      return;
+    }
+
+    // If local user initiated this action, record it without resetting or interrupting local playback
+    if (syncState.updatedBy === currentUserId) {
+      lastSyncProcessedRef.current = {
+        lastUpdated: syncState.lastUpdated,
+        isPlaying: syncState.isPlaying,
+        currentTime: syncState.currentTime,
+        audioTrackIndex: syncState.audioTrackIndex
+      };
+      return;
+    }
+
+    lastSyncProcessedRef.current = {
+      lastUpdated: syncState.lastUpdated,
+      isPlaying: syncState.isPlaying,
+      currentTime: syncState.currentTime,
+      audioTrackIndex: syncState.audioTrackIndex
+    };
+
+    // Calculate expected playback time accounting for elapsed seconds since sync event was dispatched
+    const now = Date.now();
+    const elapsed = syncState.isPlaying && syncState.lastUpdated
+      ? Math.max(0, (now - syncState.lastUpdated) / 1000)
+      : 0;
+    const expectedTime = syncState.isPlaying
+      ? Math.max(0, syncState.currentTime + elapsed)
+      : syncState.currentTime;
+
+    // Check drift tolerance (1.5 seconds) against expected current playback time
+    const timeDiff = Math.abs(video.currentTime - expectedTime);
     if (timeDiff > 1.5) {
-      video.currentTime = syncState.currentTime;
-      setCurrentTime(syncState.currentTime);
+      video.currentTime = expectedTime;
+      setCurrentTime(expectedTime);
     }
 
     // Match play/pause state
@@ -160,16 +210,16 @@ export function VideoPlayer({
       }
       setCurrentAudioTrack(syncState.audioTrackIndex);
     }
-  }, [syncState]);
+  }, [syncState, currentUserId]);
 
-  // Video listeners
+  // Video listeners: mounted with [src] to prevent teardown/re-attach on unrelated renders (e.g. chat)
   useEffect(() => {
     const video = videoRef.current;
     if (!video) return;
 
     const onPlay = () => {
       setIsPlaying(true);
-      resetControlsTimeout();
+      resetControlsTimeoutRef.current?.();
     };
 
     const onPause = () => {
@@ -185,18 +235,51 @@ export function VideoPlayer({
       if (video.buffered.length > 0) {
         setBufferedEnd(video.buffered.end(video.buffered.length - 1));
       }
+      // If time is advancing, video is playing smoothly and not buffering
+      setIsBuffering(false);
     };
 
     const onLoadedMetadata = () => {
       setDuration(video.duration);
       setIsBuffering(false);
       setPlaybackError(null);
-      detectAudioTracks();
+      detectAudioTracksRef.current?.();
     };
 
-    const onWaiting = () => setIsBuffering(true);
-    const onPlaying = () => setIsBuffering(false);
-    const onCanPlay = () => setIsBuffering(false);
+    const onWaiting = () => {
+      // Only show buffering indicator if video is not paused, not ended, and actively lacking media data
+      if (video && !video.paused && !video.ended && video.readyState < 3) {
+        setIsBuffering(true);
+      }
+    };
+
+    const onStalled = () => {
+      if (video && !video.paused && !video.ended && video.readyState < 3) {
+        setIsBuffering(true);
+      }
+    };
+
+    const onPlaying = () => {
+      setIsBuffering(false);
+    };
+
+    const onCanPlay = () => {
+      setIsBuffering(false);
+    };
+
+    const onCanPlayThrough = () => {
+      setIsBuffering(false);
+    };
+
+    const onProgress = () => {
+      if (video.buffered.length > 0) {
+        const bufferedEndVal = video.buffered.end(video.buffered.length - 1);
+        setBufferedEnd(bufferedEndVal);
+        if (video.currentTime < bufferedEndVal) {
+          setIsBuffering(false);
+        }
+      }
+    };
 
     const onError = () => {
       setIsBuffering(false);
@@ -212,7 +295,7 @@ export function VideoPlayer({
 
     const onEnded = () => {
       setIsPlaying(false);
-      if (onVideoEnded) onVideoEnded();
+      if (onVideoEndedRef.current) onVideoEndedRef.current();
     };
 
     video.addEventListener("play", onPlay);
@@ -220,8 +303,11 @@ export function VideoPlayer({
     video.addEventListener("timeupdate", onTimeUpdate);
     video.addEventListener("loadedmetadata", onLoadedMetadata);
     video.addEventListener("waiting", onWaiting);
+    video.addEventListener("stalled", onStalled);
     video.addEventListener("playing", onPlaying);
     video.addEventListener("canplay", onCanPlay);
+    video.addEventListener("canplaythrough", onCanPlayThrough);
+    video.addEventListener("progress", onProgress);
     video.addEventListener("error", onError);
     video.addEventListener("ended", onEnded);
 
@@ -231,12 +317,15 @@ export function VideoPlayer({
       video.removeEventListener("timeupdate", onTimeUpdate);
       video.removeEventListener("loadedmetadata", onLoadedMetadata);
       video.removeEventListener("waiting", onWaiting);
+      video.removeEventListener("stalled", onStalled);
       video.removeEventListener("playing", onPlaying);
       video.removeEventListener("canplay", onCanPlay);
+      video.removeEventListener("canplaythrough", onCanPlayThrough);
+      video.removeEventListener("progress", onProgress);
       video.removeEventListener("error", onError);
       video.removeEventListener("ended", onEnded);
     };
-  }, [detectAudioTracks, onVideoEnded, resetControlsTimeout]);
+  }, [src]);
 
   // Screen Orientation helpers for mobile fullscreen
   const lockLandscapeOrientation = async () => {
@@ -922,3 +1011,5 @@ export function VideoPlayer({
     </div>
   );
 }
+
+export const VideoPlayer = React.memo(VideoPlayerComponent);
