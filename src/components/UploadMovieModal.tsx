@@ -1,4 +1,4 @@
-import React, { useState, useRef } from "react";
+import React, { useState, useRef, useEffect } from "react";
 import { uploadFileToWorker } from "../lib/workerApi";
 import { addMovieToFirestore } from "../lib/firebase";
 import { 
@@ -9,7 +9,10 @@ import {
   AlertCircle, 
   CheckCircle2, 
   Loader2, 
-  FileVideo 
+  FileVideo,
+  ChevronDown,
+  Check,
+  Search
 } from "lucide-react";
 
 interface UploadMovieModalProps {
@@ -18,9 +21,41 @@ interface UploadMovieModalProps {
   onMovieAdded?: () => void;
 }
 
+const PREDEFINED_GENRES = [
+  "Action",
+  "Adventure",
+  "Animation",
+  "Biography",
+  "Comedy",
+  "Crime",
+  "Documentary",
+  "Drama",
+  "Family",
+  "Fantasy",
+  "History",
+  "Horror",
+  "Music",
+  "Musical",
+  "Mystery",
+  "Reality",
+  "Romance",
+  "Science Fiction",
+  "Short",
+  "Sport",
+  "Superhero",
+  "Thriller",
+  "TV Movie",
+  "War",
+  "Western"
+];
+
+const MAX_MOVIE_SIZE = 1024 * 1024 * 1024; // 1 GB in bytes
+
 export function UploadMovieModal({ isOpen, onClose, onMovieAdded }: UploadMovieModalProps) {
   const [title, setTitle] = useState("");
-  const [genre, setGenre] = useState("");
+  const [selectedGenres, setSelectedGenres] = useState<string[]>([]);
+  const [isGenreDropdownOpen, setIsGenreDropdownOpen] = useState(false);
+  const [genreSearch, setGenreSearch] = useState("");
   const [year, setYear] = useState(new Date().getFullYear().toString());
   const [description, setDescription] = useState("");
   const [posterMode, setPosterMode] = useState<"upload" | "url">("upload");
@@ -35,20 +70,46 @@ export function UploadMovieModal({ isOpen, onClose, onMovieAdded }: UploadMovieM
 
   const movieInputRef = useRef<HTMLInputElement>(null);
   const posterInputRef = useRef<HTMLInputElement>(null);
+  const genreDropdownRef = useRef<HTMLDivElement>(null);
+
+  // Close genre dropdown when clicking outside
+  useEffect(() => {
+    const handleOutsideClick = (e: MouseEvent) => {
+      if (genreDropdownRef.current && !genreDropdownRef.current.contains(e.target as Node)) {
+        setIsGenreDropdownOpen(false);
+      }
+    };
+    document.addEventListener("mousedown", handleOutsideClick);
+    return () => document.removeEventListener("mousedown", handleOutsideClick);
+  }, []);
 
   if (!isOpen) return null;
+
+  const handleToggleGenre = (g: string) => {
+    if (selectedGenres.includes(g)) {
+      setSelectedGenres(selectedGenres.filter((item) => item !== g));
+    } else {
+      setSelectedGenres([...selectedGenres, g]);
+    }
+  };
+
+  const handleRemoveGenre = (g: string, e?: React.MouseEvent) => {
+    if (e) e.stopPropagation();
+    setSelectedGenres(selectedGenres.filter((item) => item !== g));
+  };
 
   const handleMovieFileSelect = (e: React.ChangeEvent<HTMLInputElement>) => {
     const file = e.target.files?.[0];
     if (!file) return;
 
-    // Validate MP4 requirement strictly
+    // Validate MP4 requirement and 1 GB size limit strictly
     const isMp4Name = file.name.toLowerCase().endsWith(".mp4");
     const isMp4Type = file.type === "video/mp4" || file.type === "";
 
-    if (!isMp4Name) {
-      setError("Only MP4 video files are accepted. Please select a valid .mp4 file.");
+    if (!isMp4Name || !isMp4Type || file.size > MAX_MOVIE_SIZE) {
+      setError("Movie file must be MP4 and no larger than 1 GB.");
       setMovieFile(null);
+      if (movieInputRef.current) movieInputRef.current.value = "";
       return;
     }
 
@@ -60,14 +121,39 @@ export function UploadMovieModal({ isOpen, onClose, onMovieAdded }: UploadMovieM
     const file = e.target.files?.[0];
     if (!file) return;
 
-    if (!file.type.startsWith("image/")) {
-      setError("Poster file must be an image (JPEG, PNG, WebP, etc.).");
+    const validTypes = ["image/jpeg", "image/png", "image/webp", "image/jpg"];
+    const lower = file.name.toLowerCase();
+    const validExts = [".jpg", ".jpeg", ".png", ".webp"];
+    const isAllowedImage = validTypes.includes(file.type) || validExts.some((ext) => lower.endsWith(ext));
+
+    if (!isAllowedImage) {
+      setError("Poster file must be a JPG, JPEG, PNG, or WebP image.");
       setPosterFile(null);
+      if (posterInputRef.current) posterInputRef.current.value = "";
       return;
     }
 
-    setError(null);
-    setPosterFile(file);
+    // Validate the actual image dimensions after selection: height must be greater than width (portrait)
+    const img = new Image();
+    const objectUrl = URL.createObjectURL(file);
+    img.onload = () => {
+      URL.revokeObjectURL(objectUrl);
+      if (img.naturalHeight <= img.naturalWidth) {
+        setError("Poster must be portrait-oriented (height greater than width).");
+        setPosterFile(null);
+        if (posterInputRef.current) posterInputRef.current.value = "";
+        return;
+      }
+      setError(null);
+      setPosterFile(file);
+    };
+    img.onerror = () => {
+      URL.revokeObjectURL(objectUrl);
+      setError("Unable to read poster image. Please select a valid JPG, JPEG, PNG, or WebP file.");
+      setPosterFile(null);
+      if (posterInputRef.current) posterInputRef.current.value = "";
+    };
+    img.src = objectUrl;
   };
 
   const handleSubmit = async (e: React.FormEvent) => {
@@ -79,8 +165,8 @@ export function UploadMovieModal({ isOpen, onClose, onMovieAdded }: UploadMovieM
       setError("Movie Title is mandatory.");
       return;
     }
-    if (!genre.trim()) {
-      setError("Genre is mandatory (e.g. Action, Sci-Fi).");
+    if (selectedGenres.length === 0) {
+      setError("At least one Genre is mandatory. Please select from the dropdown.");
       return;
     }
     const yearNum = Number(year);
@@ -105,9 +191,9 @@ export function UploadMovieModal({ isOpen, onClose, onMovieAdded }: UploadMovieM
       return;
     }
 
-    // Double check MP4
-    if (!movieFile.name.toLowerCase().endsWith(".mp4")) {
-      setError("Video file must be an MP4 (.mp4).");
+    // Double check MP4 and 1 GB file size strictly before starting Worker upload
+    if (!movieFile.name.toLowerCase().endsWith(".mp4") || movieFile.size > MAX_MOVIE_SIZE) {
+      setError("Movie file must be MP4 and no larger than 1 GB.");
       return;
     }
 
@@ -124,11 +210,11 @@ export function UploadMovieModal({ isOpen, onClose, onMovieAdded }: UploadMovieM
       setUploadStep(`Uploading MP4 movie "${movieFile.name}" (${(movieFile.size / (1024 * 1024)).toFixed(1)} MB)...`);
       const finalMovieUrl = await uploadFileToWorker(movieFile, movieFile.name);
 
-      // 3. Save into Firestore `movie` collection
+      // 3. Save into Firestore `movie` collection with comma-separated genres for complete compatibility
       setUploadStep("Saving movie metadata into Firestore...");
       await addMovieToFirestore({
         Title: title.trim(),
-        genre: genre.trim(),
+        genre: selectedGenres.join(", "),
         year: yearNum,
         description: description.trim(),
         poster: finalPosterUrl,
@@ -148,6 +234,10 @@ export function UploadMovieModal({ isOpen, onClose, onMovieAdded }: UploadMovieM
       setUploadStep("");
     }
   };
+
+  const filteredGenres = PREDEFINED_GENRES.filter((g) =>
+    g.toLowerCase().includes(genreSearch.toLowerCase().trim())
+  );
 
   return (
     <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/85 backdrop-blur-md overflow-y-auto">
@@ -194,7 +284,7 @@ export function UploadMovieModal({ isOpen, onClose, onMovieAdded }: UploadMovieM
               <label className="text-xs font-semibold uppercase tracking-wider text-rose-400 flex items-center gap-1.5">
                 <FileVideo className="w-4 h-4" /> MP4 Video File (Mandatory)
               </label>
-              <span className="text-[11px] text-neutral-400">Worker Upload • .mp4 only</span>
+              <span className="text-[11px] text-neutral-400">Worker Upload • .mp4 only • Max 1 GB</span>
             </div>
 
             <input
@@ -219,7 +309,10 @@ export function UploadMovieModal({ isOpen, onClose, onMovieAdded }: UploadMovieM
                 </div>
                 <button
                   type="button"
-                  onClick={() => setMovieFile(null)}
+                  onClick={() => {
+                    setMovieFile(null);
+                    if (movieInputRef.current) movieInputRef.current.value = "";
+                  }}
                   disabled={isUploading}
                   className="text-xs text-neutral-400 hover:text-rose-400 px-2.5 py-1 rounded hover:bg-neutral-800 transition"
                 >
@@ -234,13 +327,13 @@ export function UploadMovieModal({ isOpen, onClose, onMovieAdded }: UploadMovieM
                 <UploadCloud className="w-8 h-8 text-neutral-400 mx-auto mb-2" />
                 <p className="text-sm font-medium text-white">Click or drag MP4 video here</p>
                 <p className="text-xs text-neutral-400 mt-1">
-                  Required: File must end with .mp4
+                  Required: File must be .mp4 and no larger than 1 GB
                 </p>
               </div>
             )}
           </div>
 
-          {/* Title & Genre */}
+          {/* Title & Multi-Select Genre Dropdown */}
           <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
             <div>
               <label className="block text-xs font-semibold uppercase tracking-wider text-neutral-300 mb-1.5">
@@ -257,19 +350,114 @@ export function UploadMovieModal({ isOpen, onClose, onMovieAdded }: UploadMovieM
               />
             </div>
 
-            <div>
+            {/* Multi-Select Genre Dropdown */}
+            <div ref={genreDropdownRef} className="relative">
               <label className="block text-xs font-semibold uppercase tracking-wider text-neutral-300 mb-1.5">
                 Genre(s) *
               </label>
-              <input
-                type="text"
-                required
-                value={genre}
-                onChange={(e) => setGenre(e.target.value)}
-                placeholder="e.g. Sci-Fi, Thriller"
-                disabled={isUploading}
-                className="w-full px-3.5 py-2.5 bg-neutral-950 border border-neutral-700 rounded-xl text-white placeholder-neutral-500 focus:outline-none focus:ring-2 focus:ring-rose-500 text-sm"
-              />
+              
+              <div
+                onClick={() => !isUploading && setIsGenreDropdownOpen(!isGenreDropdownOpen)}
+                className={`w-full min-h-[42px] px-3 py-2 bg-neutral-950 border rounded-xl flex items-center justify-between gap-2 cursor-pointer transition ${
+                  isGenreDropdownOpen
+                    ? "border-rose-500 ring-2 ring-rose-500/40"
+                    : "border-neutral-700 hover:border-neutral-600"
+                } ${isUploading ? "opacity-50 cursor-not-allowed" : ""}`}
+              >
+                <div className="flex flex-wrap items-center gap-1.5 flex-1 overflow-hidden">
+                  {selectedGenres.length > 0 ? (
+                    selectedGenres.map((g) => (
+                      <span
+                        key={g}
+                        className="inline-flex items-center gap-1 px-2 py-0.5 rounded-md bg-rose-500/20 text-rose-300 border border-rose-500/30 text-xs font-medium"
+                      >
+                        <span>{g}</span>
+                        <button
+                          type="button"
+                          onClick={(e) => handleRemoveGenre(g, e)}
+                          className="hover:text-white p-0.5"
+                          title={`Remove ${g}`}
+                        >
+                          <X className="w-3 h-3" />
+                        </button>
+                      </span>
+                    ))
+                  ) : (
+                    <span className="text-xs text-neutral-500">
+                      Select genre(s) from list...
+                    </span>
+                  )}
+                </div>
+                <ChevronDown
+                  className={`w-4 h-4 text-neutral-400 shrink-0 transition-transform duration-200 ${
+                    isGenreDropdownOpen ? "rotate-180 text-rose-400" : ""
+                  }`}
+                />
+              </div>
+
+              {/* Dropdown Popover Menu */}
+              {isGenreDropdownOpen && (
+                <div className="absolute left-0 right-0 top-full mt-1.5 z-50 bg-neutral-900 border border-neutral-700 rounded-xl shadow-2xl overflow-hidden animate-in fade-in slide-in-from-top-2 duration-150">
+                  {/* Search inside predefined genres */}
+                  <div className="p-2 border-b border-neutral-800 bg-neutral-950">
+                    <div className="relative">
+                      <Search className="w-3.5 h-3.5 text-neutral-400 absolute left-2.5 top-1/2 -translate-y-1/2" />
+                      <input
+                        type="text"
+                        value={genreSearch}
+                        onChange={(e) => setGenreSearch(e.target.value)}
+                        placeholder="Filter genres..."
+                        className="w-full pl-8 pr-3 py-1.5 bg-neutral-900 border border-neutral-800 rounded-lg text-xs text-white placeholder-neutral-500 focus:outline-none focus:border-rose-500"
+                        onClick={(e) => e.stopPropagation()}
+                      />
+                    </div>
+                  </div>
+
+                  {/* Scrollable Predefined Genres List */}
+                  <div className="max-h-56 overflow-y-auto p-1.5 space-y-0.5">
+                    {filteredGenres.length > 0 ? (
+                      filteredGenres.map((g) => {
+                        const isSelected = selectedGenres.includes(g);
+                        return (
+                          <div
+                            key={g}
+                            onClick={() => handleToggleGenre(g)}
+                            className={`flex items-center justify-between px-3 py-2 rounded-lg text-xs font-medium cursor-pointer transition select-none ${
+                              isSelected
+                                ? "bg-rose-500/20 text-rose-300 font-semibold"
+                                : "text-neutral-300 hover:bg-neutral-800 hover:text-white"
+                            }`}
+                          >
+                            <span>{g}</span>
+                            {isSelected && <Check className="w-3.5 h-3.5 text-rose-400" />}
+                          </div>
+                        );
+                      })
+                    ) : (
+                      <div className="p-3 text-center text-xs text-neutral-500">
+                        No matching genres found.
+                      </div>
+                    )}
+                  </div>
+
+                  {/* Footer status in dropdown */}
+                  <div className="p-2 bg-neutral-950/80 border-t border-neutral-800 flex items-center justify-between text-[11px] text-neutral-400 px-3">
+                    <span>{selectedGenres.length} selected</span>
+                    {selectedGenres.length > 0 && (
+                      <button
+                        type="button"
+                        onClick={(e) => {
+                          e.stopPropagation();
+                          setSelectedGenres([]);
+                        }}
+                        className="text-rose-400 hover:underline"
+                      >
+                        Clear all
+                      </button>
+                    )}
+                  </div>
+                </div>
+              )}
             </div>
           </div>
 
@@ -294,7 +482,7 @@ export function UploadMovieModal({ isOpen, onClose, onMovieAdded }: UploadMovieM
             <div className="sm:col-span-2">
               <div className="flex items-center justify-between mb-1.5">
                 <label className="text-xs font-semibold uppercase tracking-wider text-neutral-300">
-                  Poster Image *
+                  Poster Image * (Portrait only)
                 </label>
                 <div className="flex items-center gap-2 text-xs">
                   <button
@@ -319,17 +507,20 @@ export function UploadMovieModal({ isOpen, onClose, onMovieAdded }: UploadMovieM
                   <input
                     ref={posterInputRef}
                     type="file"
-                    accept="image/*"
+                    accept=".jpg,.jpeg,.png,.webp,image/jpeg,image/png,image/webp"
                     className="hidden"
                     onChange={handlePosterFileSelect}
                     disabled={isUploading}
                   />
                   {posterFile ? (
                     <div className="flex items-center justify-between p-2.5 bg-neutral-950 border border-neutral-700 rounded-xl">
-                      <span className="text-xs text-neutral-200 truncate">{posterFile.name}</span>
+                      <span className="text-xs text-neutral-200 truncate">{posterFile.name} (Portrait)</span>
                       <button
                         type="button"
-                        onClick={() => setPosterFile(null)}
+                        onClick={() => {
+                          setPosterFile(null);
+                          if (posterInputRef.current) posterInputRef.current.value = "";
+                        }}
                         className="text-xs text-rose-400 hover:underline shrink-0 ml-2"
                       >
                         Remove
@@ -343,7 +534,7 @@ export function UploadMovieModal({ isOpen, onClose, onMovieAdded }: UploadMovieM
                       className="w-full py-2.5 px-3 bg-neutral-950 border border-neutral-700 rounded-xl text-xs text-neutral-400 hover:text-white hover:border-neutral-600 flex items-center justify-center gap-2 transition"
                     >
                       <ImageIcon className="w-4 h-4 text-neutral-400" />
-                      <span>Select Poster Image File</span>
+                      <span>Select Portrait Poster (JPG, PNG, WebP)</span>
                     </button>
                   )}
                 </div>
@@ -352,7 +543,7 @@ export function UploadMovieModal({ isOpen, onClose, onMovieAdded }: UploadMovieM
                   type="url"
                   value={posterUrl}
                   onChange={(e) => setPosterUrl(e.target.value)}
-                  placeholder="https://example.com/poster.jpg"
+                  placeholder="https://example.com/portrait-poster.jpg"
                   disabled={isUploading}
                   className="w-full px-3.5 py-2.5 bg-neutral-950 border border-neutral-700 rounded-xl text-white placeholder-neutral-500 focus:outline-none focus:ring-2 focus:ring-rose-500 text-sm"
                 />
