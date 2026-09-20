@@ -1,0 +1,526 @@
+import React, { useState, useEffect, useMemo } from "react";
+import { useAuth } from "../context/AuthContext";
+import { rtdb, subscribeToMovies } from "../lib/firebase";
+import { ref, update } from "firebase/database";
+import { Movie } from "../types";
+import { 
+  X, 
+  Film, 
+  Link as LinkIcon, 
+  HardDrive, 
+  Search, 
+  AlertCircle, 
+  Loader2, 
+  Check, 
+  Sparkles,
+  RefreshCw,
+  Video
+} from "lucide-react";
+
+interface ChangeMediaModalProps {
+  isOpen: boolean;
+  onClose: () => void;
+  roomCode: string;
+  currentMovieTitle?: string;
+  isHost: boolean;
+  controlsLocked: boolean;
+  onOfflineFileSelected?: (file: File) => void;
+}
+
+const MAX_MOVIE_SIZE = 1024 * 1024 * 1024; // 1 GB
+
+export function ChangeMediaModal({
+  isOpen,
+  onClose,
+  roomCode,
+  currentMovieTitle,
+  isHost,
+  controlsLocked,
+  onOfflineFileSelected
+}: ChangeMediaModalProps) {
+  const { user, profile } = useAuth();
+
+  // Tab state: "search" | "direct" | "offline"
+  const [activeSourceTab, setActiveSourceTab] = useState<"search" | "direct" | "offline">("search");
+
+  // Firestore movies state
+  const [movies, setMovies] = useState<Movie[]>([]);
+  const [loadingMovies, setLoadingMovies] = useState(true);
+  const [searchQuery, setSearchQuery] = useState("");
+  const [selectedMovieId, setSelectedMovieId] = useState<string>("");
+
+  // Direct URL state
+  const [directTitle, setDirectTitle] = useState("");
+  const [directUrl, setDirectUrl] = useState("");
+
+  // Offline video state
+  const [offlineFile, setOfflineFile] = useState<File | null>(null);
+
+  // Submitting state & Error
+  const [isUpdating, setIsUpdating] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+
+  // Subscribe to Firestore movies when modal is mounted/open
+  useEffect(() => {
+    if (!isOpen) return;
+
+    setLoadingMovies(true);
+    const unsubscribe = subscribeToMovies(
+      (loadedMovies) => {
+        setMovies(loadedMovies);
+        setLoadingMovies(false);
+        if (loadedMovies.length > 0 && !selectedMovieId) {
+          setSelectedMovieId(loadedMovies[0].id);
+        }
+      },
+      (err) => {
+        console.error("Error loading movies for ChangeMediaModal:", err);
+        setLoadingMovies(false);
+      }
+    );
+
+    return () => {
+      if (unsubscribe) unsubscribe();
+    };
+  }, [isOpen]);
+
+  // Reset form errors when switching tabs or reopening
+  useEffect(() => {
+    setError(null);
+  }, [activeSourceTab, isOpen]);
+
+  // Filter movies for Search tab
+  const filteredMovies = useMemo(() => {
+    const q = searchQuery.trim().toLowerCase();
+    if (!q) return movies;
+    return movies.filter((m) => {
+      return (
+        m.Title.toLowerCase().includes(q) ||
+        (m.genre && m.genre.toLowerCase().includes(q)) ||
+        (m.description && m.description.toLowerCase().includes(q)) ||
+        (m.year && m.year.toString().includes(q))
+      );
+    });
+  }, [movies, searchQuery]);
+
+  if (!isOpen) return null;
+
+  const canChangeMedia = isHost || !controlsLocked;
+
+  const handleSubmit = async (e: React.FormEvent) => {
+    e.preventDefault();
+
+    if (!user || !profile) {
+      setError("User authentication not ready. Please try again.");
+      return;
+    }
+
+    if (!canChangeMedia) {
+      setError("Controls are locked by the host. Only the room host can change media.");
+      return;
+    }
+
+    setError(null);
+    setIsUpdating(true);
+
+    try {
+      let movieTitle = "Shared Video";
+      let moviePoster = "";
+      let movieUrl = "";
+      let movieId = "";
+      let movieSource: "firestore" | "direct" | "offline" = activeSourceTab === "search" ? "firestore" : activeSourceTab;
+      let offlineFileName = "";
+
+      if (activeSourceTab === "search") {
+        const found = movies.find((m) => m.id === selectedMovieId);
+        if (!found) {
+          setError("Please select a movie from the search results.");
+          setIsUpdating(false);
+          return;
+        }
+        movieId = found.id;
+        movieTitle = found.Title;
+        moviePoster = found.poster || "";
+        movieUrl = found.url;
+        movieSource = "firestore";
+      } else if (activeSourceTab === "direct") {
+        const trimmedUrl = directUrl.trim();
+        if (!trimmedUrl) {
+          setError("Please enter a direct MP4 video URL.");
+          setIsUpdating(false);
+          return;
+        }
+        let parsedUrl: URL;
+        try {
+          parsedUrl = new URL(trimmedUrl);
+          if (!["http:", "https:"].includes(parsedUrl.protocol)) {
+            throw new Error("Invalid protocol");
+          }
+        } catch {
+          setError("Please enter a valid HTTP or HTTPS video URL (e.g. https://example.com/movie.mp4).");
+          setIsUpdating(false);
+          return;
+        }
+
+        movieTitle = directTitle.trim() || "Direct Video Stream";
+        movieUrl = trimmedUrl;
+        movieSource = "direct";
+      } else if (activeSourceTab === "offline") {
+        if (!offlineFile) {
+          setError("Please choose a local MP4 video file from your device.");
+          setIsUpdating(false);
+          return;
+        }
+
+        // Validate MP4 and 1GB file size
+        if (!offlineFile.name.toLowerCase().endsWith(".mp4") || offlineFile.size > MAX_MOVIE_SIZE) {
+          setError("Offline video file must be an .mp4 file and no larger than 1 GB.");
+          setIsUpdating(false);
+          return;
+        }
+
+        movieTitle = offlineFile.name.replace(/\.[^/.]+$/, "");
+        offlineFileName = offlineFile.name;
+        movieUrl = `offline://${offlineFile.name}`;
+        movieSource = "offline";
+      }
+
+      const now = Date.now();
+
+      // Update room media in RTDB
+      const roomRef = ref(rtdb, `rooms/${roomCode}`);
+      await update(roomRef, {
+        movieSource,
+        movieId,
+        movieTitle,
+        moviePoster,
+        movieUrl,
+        offlineFileName,
+        movieCompleted: false,
+        playbackState: {
+          isPlaying: false,
+          currentTime: 0,
+          lastUpdated: now,
+          updatedBy: user.uid,
+          updatedByUsername: profile.username,
+          audioTrackIndex: 0
+        }
+      });
+
+      // If offline video selected, update local state & participant record
+      if (activeSourceTab === "offline" && offlineFile) {
+        if (onOfflineFileSelected) {
+          onOfflineFileSelected(offlineFile);
+        }
+        const participantRef = ref(rtdb, `rooms/${roomCode}/participants/${user.uid}`);
+        await update(participantRef, { hasOfflineFile: true }).catch(() => {});
+      }
+
+      onClose();
+    } catch (err: any) {
+      console.error("Error changing room media:", err);
+      setError(err.message || "Failed to update room media. Please try again.");
+    } finally {
+      setIsUpdating(false);
+    }
+  };
+
+  return (
+    <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/85 backdrop-blur-md overflow-y-auto">
+      <div className="w-full max-w-lg bg-neutral-900 border border-neutral-800 rounded-2xl p-6 sm:p-7 shadow-2xl relative my-8 animate-in fade-in zoom-in-95 duration-150">
+        <button
+          onClick={onClose}
+          disabled={isUpdating}
+          className="absolute top-5 right-5 p-2 text-neutral-400 hover:text-white rounded-lg hover:bg-neutral-800 transition disabled:opacity-40"
+          aria-label="Close"
+        >
+          <X className="w-5 h-5" />
+        </button>
+
+        {/* Header */}
+        <div className="flex items-center gap-3 mb-5">
+          <div className="p-2.5 rounded-xl bg-gradient-to-tr from-rose-600 to-amber-500 text-white shadow-lg shadow-rose-600/20">
+            <RefreshCw className="w-5 h-5" />
+          </div>
+          <div>
+            <h3 className="text-lg font-bold font-heading text-white">Change Room Media</h3>
+            <p className="text-xs text-neutral-400">
+              Select a new video source to synchronize with everyone in room #{roomCode}
+            </p>
+          </div>
+        </div>
+
+        {/* Permission warning if locked and not host */}
+        {!canChangeMedia && (
+          <div className="flex items-start gap-2.5 p-3 bg-amber-500/10 border border-amber-500/30 rounded-xl text-amber-300 text-xs mb-4">
+            <AlertCircle className="w-4 h-4 shrink-0 mt-0.5" />
+            <span>Controls are currently locked by the host. Only the room host can change media.</span>
+          </div>
+        )}
+
+        {error && (
+          <div className="flex items-start gap-2.5 p-3.5 bg-rose-500/10 border border-rose-500/30 rounded-xl text-rose-300 text-xs mb-4">
+            <AlertCircle className="w-4 h-4 shrink-0 mt-0.5" />
+            <span>{error}</span>
+          </div>
+        )}
+
+        <form onSubmit={handleSubmit} className="space-y-4">
+          {/* 3 Tab Options: 1. Search | 2. MP4 URL | 3. Offline Video */}
+          <div>
+            <label className="block text-[11px] font-semibold uppercase tracking-wider text-neutral-400 mb-2">
+              Select Media Source Option
+            </label>
+            <div className="grid grid-cols-3 gap-2 p-1 bg-neutral-950 rounded-xl border border-neutral-800">
+              {/* Option 1: Search */}
+              <button
+                type="button"
+                onClick={() => setActiveSourceTab("search")}
+                className={`py-2 px-2.5 rounded-lg text-xs font-semibold flex items-center justify-center gap-1.5 transition ${
+                  activeSourceTab === "search"
+                    ? "bg-rose-600 text-white shadow"
+                    : "text-neutral-400 hover:text-white"
+                }`}
+              >
+                <Search className="w-3.5 h-3.5" />
+                <span>Search</span>
+              </button>
+
+              {/* Option 2: MP4 URL */}
+              <button
+                type="button"
+                onClick={() => setActiveSourceTab("direct")}
+                className={`py-2 px-2.5 rounded-lg text-xs font-semibold flex items-center justify-center gap-1.5 transition ${
+                  activeSourceTab === "direct"
+                    ? "bg-rose-600 text-white shadow"
+                    : "text-neutral-400 hover:text-white"
+                }`}
+              >
+                <LinkIcon className="w-3.5 h-3.5" />
+                <span>MP4 URL</span>
+              </button>
+
+              {/* Option 3: Offline Video */}
+              <button
+                type="button"
+                onClick={() => setActiveSourceTab("offline")}
+                className={`py-2 px-2.5 rounded-lg text-xs font-semibold flex items-center justify-center gap-1.5 transition ${
+                  activeSourceTab === "offline"
+                    ? "bg-rose-600 text-white shadow"
+                    : "text-neutral-400 hover:text-white"
+                }`}
+              >
+                <HardDrive className="w-3.5 h-3.5" />
+                <span>Offline Video</span>
+              </button>
+            </div>
+          </div>
+
+          {/* TAB 1: Search (Firestore Movie Library) */}
+          {activeSourceTab === "search" && (
+            <div className="space-y-3 pt-1">
+              {/* Search Field inside Modal */}
+              <div className="relative">
+                <Search className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-neutral-500" />
+                <input
+                  type="text"
+                  value={searchQuery}
+                  onChange={(e) => setSearchQuery(e.target.value)}
+                  placeholder="Search movie title, genre, year..."
+                  className="w-full pl-9 pr-9 py-2 bg-neutral-950 border border-neutral-700 rounded-xl text-white placeholder-neutral-500 text-xs focus:outline-none focus:ring-2 focus:ring-rose-500"
+                />
+                {searchQuery && (
+                  <button
+                    type="button"
+                    onClick={() => setSearchQuery("")}
+                    className="absolute right-2.5 top-1/2 -translate-y-1/2 p-1 text-neutral-400 hover:text-white rounded"
+                  >
+                    <X className="w-3.5 h-3.5" />
+                  </button>
+                )}
+              </div>
+
+              {/* Movie Search Results List */}
+              {loadingMovies ? (
+                <div className="flex items-center justify-center py-8 text-neutral-400 text-xs gap-2">
+                  <Loader2 className="w-4 h-4 animate-spin text-rose-500" />
+                  <span>Loading movies from library...</span>
+                </div>
+              ) : filteredMovies.length > 0 ? (
+                <div className="space-y-2 max-h-56 overflow-y-auto pr-1">
+                  {filteredMovies.map((m) => {
+                    const isSelected = selectedMovieId === m.id;
+                    return (
+                      <div
+                        key={m.id}
+                        onClick={() => setSelectedMovieId(m.id)}
+                        className={`flex items-center gap-3 p-2.5 rounded-xl border cursor-pointer transition ${
+                          isSelected
+                            ? "bg-rose-500/15 border-rose-500 text-white shadow-sm"
+                            : "bg-neutral-950/60 border-neutral-800 text-neutral-300 hover:border-neutral-700 hover:bg-neutral-950"
+                        }`}
+                      >
+                        {m.poster ? (
+                          <img
+                            src={m.poster}
+                            alt={m.Title}
+                            className="w-10 h-14 object-cover rounded-md shrink-0 bg-neutral-800"
+                            referrerPolicy="no-referrer"
+                          />
+                        ) : (
+                          <div className="w-10 h-14 bg-neutral-800 rounded-md flex items-center justify-center shrink-0">
+                            <Film className="w-4 h-4 text-neutral-500" />
+                          </div>
+                        )}
+                        <div className="flex-1 min-w-0">
+                          <div className="flex items-center justify-between gap-2">
+                            <p className="text-xs font-semibold text-white truncate">{m.Title}</p>
+                            {isSelected && (
+                              <span className="shrink-0 p-1 bg-rose-600 rounded-full text-white">
+                                <Check className="w-2.5 h-2.5" />
+                              </span>
+                            )}
+                          </div>
+                          <p className="text-[11px] text-neutral-400 truncate">
+                            {m.genre} • {m.year}
+                          </p>
+                          {m.description && (
+                            <p className="text-[10px] text-neutral-500 line-clamp-1 mt-0.5">
+                              {m.description}
+                            </p>
+                          )}
+                        </div>
+                      </div>
+                    );
+                  })}
+                </div>
+              ) : (
+                <div className="text-center py-6 px-4 bg-neutral-950 rounded-xl border border-neutral-800">
+                  <Film className="w-6 h-6 text-neutral-600 mx-auto mb-1.5" />
+                  <p className="text-xs font-semibold text-neutral-300">No movies found</p>
+                  <p className="text-[11px] text-neutral-500 mt-0.5">
+                    {searchQuery ? `No matches found for "${searchQuery}".` : "No movies in library."}
+                  </p>
+                </div>
+              )}
+            </div>
+          )}
+
+          {/* TAB 2: MP4 URL */}
+          {activeSourceTab === "direct" && (
+            <div className="space-y-3 pt-1">
+              <div>
+                <label className="block text-[11px] font-semibold uppercase tracking-wider text-neutral-400 mb-1">
+                  Video Title (Optional)
+                </label>
+                <input
+                  type="text"
+                  value={directTitle}
+                  onChange={(e) => setDirectTitle(e.target.value)}
+                  placeholder="e.g. Action Trailer"
+                  className="w-full px-3 py-2 bg-neutral-950 border border-neutral-700 rounded-xl text-white placeholder-neutral-500 focus:outline-none focus:ring-2 focus:ring-rose-500 text-xs"
+                />
+              </div>
+
+              <div>
+                <label className="block text-[11px] font-semibold uppercase tracking-wider text-neutral-400 mb-1">
+                  Direct MP4 Video URL *
+                </label>
+                <input
+                  type="url"
+                  required
+                  value={directUrl}
+                  onChange={(e) => setDirectUrl(e.target.value)}
+                  placeholder="https://example.com/movie.mp4"
+                  className="w-full px-3 py-2 bg-neutral-950 border border-neutral-700 rounded-xl text-white placeholder-neutral-500 focus:outline-none focus:ring-2 focus:ring-rose-500 text-xs"
+                />
+                <p className="text-[10px] text-neutral-500 mt-1">
+                  Provide an HTTP or HTTPS link to a direct MP4 video stream.
+                </p>
+              </div>
+            </div>
+          )}
+
+          {/* TAB 3: Offline Video */}
+          {activeSourceTab === "offline" && (
+            <div className="space-y-3 pt-1">
+              <div className="p-3 bg-neutral-950/90 border border-amber-500/30 rounded-xl text-[11px] text-amber-300/90">
+                <p className="font-semibold mb-1 flex items-center gap-1.5">
+                  <HardDrive className="w-3.5 h-3.5 text-amber-400" /> Offline Synchronization:
+                </p>
+                <p className="text-neutral-400 leading-relaxed">
+                  Your local video file plays directly on your device. Other participants in the room will be prompted to select their matching local copy of this file to stay in sync.
+                </p>
+              </div>
+
+              <div>
+                <label className="block text-[11px] font-semibold uppercase tracking-wider text-neutral-400 mb-1.5">
+                  Select Local MP4 File * (Max 1 GB)
+                </label>
+                <input
+                  type="file"
+                  accept=".mp4,video/mp4"
+                  onChange={(e) => {
+                    const file = e.target.files?.[0];
+                    if (!file) return;
+                    if (!file.name.toLowerCase().endsWith(".mp4") || file.size > MAX_MOVIE_SIZE) {
+                      setError("File must be an .mp4 video and no larger than 1 GB.");
+                      setOfflineFile(null);
+                      return;
+                    }
+                    setError(null);
+                    setOfflineFile(file);
+                  }}
+                  className="w-full text-xs text-neutral-400 file:mr-3 file:py-1.5 file:px-3 file:rounded-lg file:border-0 file:text-xs file:font-semibold file:bg-neutral-800 file:text-white hover:file:bg-neutral-700 cursor-pointer"
+                />
+              </div>
+
+              {offlineFile && (
+                <div className="p-2.5 bg-neutral-950 border border-neutral-800 rounded-xl flex items-center justify-between">
+                  <div className="truncate">
+                    <p className="text-xs font-semibold text-white truncate">{offlineFile.name}</p>
+                    <p className="text-[10px] text-neutral-400">
+                      {(offlineFile.size / (1024 * 1024)).toFixed(1)} MB • MP4
+                    </p>
+                  </div>
+                  <span className="text-[10px] px-2 py-0.5 bg-emerald-500/20 text-emerald-300 rounded-md font-medium">
+                    Ready
+                  </span>
+                </div>
+              )}
+            </div>
+          )}
+
+          {/* Action Buttons */}
+          <div className="flex items-center justify-end gap-2.5 pt-3 border-t border-neutral-800/80">
+            <button
+              type="button"
+              onClick={onClose}
+              disabled={isUpdating}
+              className="px-4 py-2 text-neutral-300 hover:text-white text-xs font-medium rounded-xl hover:bg-neutral-800 transition disabled:opacity-50"
+            >
+              Cancel
+            </button>
+            <button
+              type="submit"
+              disabled={isUpdating || !canChangeMedia}
+              className="px-5 py-2 bg-gradient-to-r from-rose-600 to-rose-700 hover:from-rose-500 hover:to-rose-600 text-white text-xs font-semibold rounded-xl shadow-md shadow-rose-600/20 transition disabled:opacity-50 flex items-center gap-1.5"
+            >
+              {isUpdating ? (
+                <>
+                  <Loader2 className="w-3.5 h-3.5 animate-spin" />
+                  <span>Updating Media...</span>
+                </>
+              ) : (
+                <>
+                  <RefreshCw className="w-3.5 h-3.5" />
+                  <span>Switch Media</span>
+                </>
+              )}
+            </button>
+          </div>
+        </form>
+      </div>
+    </div>
+  );
+}

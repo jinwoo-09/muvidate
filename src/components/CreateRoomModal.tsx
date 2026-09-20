@@ -1,4 +1,4 @@
-import React, { useState } from "react";
+import React, { useState, useEffect, useMemo } from "react";
 import { useAuth } from "../context/AuthContext";
 import { 
   generateUniqueRoomCode, 
@@ -16,7 +16,9 @@ import {
   AlertCircle, 
   Loader2, 
   Sparkles,
-  Lock
+  Lock,
+  Search,
+  Check
 } from "lucide-react";
 
 interface CreateRoomModalProps {
@@ -43,6 +45,7 @@ export function CreateRoomModal({
   const [selectedMovieId, setSelectedMovieId] = useState<string>(
     initialMovie ? initialMovie.id : (movies[0]?.id || "")
   );
+  const [movieSearchQuery, setMovieSearchQuery] = useState("");
   const [directTitle, setDirectTitle] = useState("");
   const [directUrl, setDirectUrl] = useState("");
   const [offlineFile, setOfflineFile] = useState<File | null>(null);
@@ -50,6 +53,40 @@ export function CreateRoomModal({
   const [controlsLocked, setControlsLocked] = useState<boolean>(false);
   const [isCreating, setIsCreating] = useState(false);
   const [error, setError] = useState<string | null>(null);
+
+  // Update selected movie if initialMovie or movies list changes
+  useEffect(() => {
+    if (initialMovie) {
+      setSelectedMovieId(initialMovie.id);
+      setSourceType("firestore");
+    } else if (!selectedMovieId && movies.length > 0) {
+      setSelectedMovieId(movies[0].id);
+    }
+  }, [initialMovie, movies, selectedMovieId]);
+
+  // Filter movies based on search query in the popup
+  const filteredMovies = useMemo(() => {
+    const q = movieSearchQuery.trim().toLowerCase();
+    if (!q) return movies;
+    return movies.filter((m) => {
+      return (
+        m.Title.toLowerCase().includes(q) ||
+        (m.genre && m.genre.toLowerCase().includes(q)) ||
+        (m.description && m.description.toLowerCase().includes(q)) ||
+        (m.year && m.year.toString().includes(q))
+      );
+    });
+  }, [movies, movieSearchQuery]);
+
+  // Auto-select first matching movie if current selection is filtered out
+  useEffect(() => {
+    if (sourceType === "firestore" && filteredMovies.length > 0) {
+      const isSelectedInList = filteredMovies.some((m) => m.id === selectedMovieId);
+      if (!isSelectedInList) {
+        setSelectedMovieId(filteredMovies[0].id);
+      }
+    }
+  }, [filteredMovies, selectedMovieId, sourceType]);
 
   if (!isOpen) return null;
 
@@ -240,47 +277,97 @@ export function CreateRoomModal({
             </div>
           </div>
 
-          {/* Source A: Firestore Movie */}
+          {/* Source A: Firestore Movie with in-modal Search */}
           {sourceType === "firestore" && (
-            <div>
-              <label className="block text-xs font-semibold uppercase tracking-wider text-neutral-300 mb-1.5">
-                Choose Movie from Library
-              </label>
-              {movies.length > 0 ? (
-                <div className="space-y-2 max-h-48 overflow-y-auto pr-1">
-                  {movies.map((m) => (
-                    <div
-                      key={m.id}
-                      onClick={() => setSelectedMovieId(m.id)}
-                      className={`flex items-center gap-3 p-2.5 rounded-xl border cursor-pointer transition ${
-                        selectedMovieId === m.id
-                          ? "bg-rose-500/15 border-rose-500 text-white"
-                          : "bg-neutral-950/60 border-neutral-800 text-neutral-300 hover:border-neutral-700"
-                      }`}
-                    >
-                      {m.poster ? (
-                        <img
-                          src={m.poster}
-                          alt={m.Title}
-                          className="w-10 h-14 object-cover rounded-md shrink-0 bg-neutral-800"
-                          referrerPolicy="no-referrer"
-                        />
-                      ) : (
-                        <div className="w-10 h-14 bg-neutral-800 rounded-md flex items-center justify-center shrink-0">
-                          <Film className="w-4 h-4 text-neutral-500" />
+            <div className="space-y-3">
+              <div className="flex items-center justify-between">
+                <label className="block text-xs font-semibold uppercase tracking-wider text-neutral-300">
+                  Search & Choose Movie from Library
+                </label>
+                <span className="text-[11px] text-neutral-400">
+                  {filteredMovies.length} {filteredMovies.length === 1 ? "movie" : "movies"} available
+                </span>
+              </div>
+
+              {/* In-Modal Movie Search Bar */}
+              <div className="relative">
+                <Search className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-neutral-500" />
+                <input
+                  type="text"
+                  value={movieSearchQuery}
+                  onChange={(e) => setMovieSearchQuery(e.target.value)}
+                  placeholder="Type to search movies by title, genre, year..."
+                  className="w-full pl-9 pr-9 py-2.5 bg-neutral-950 border border-neutral-700 rounded-xl text-white placeholder-neutral-500 focus:outline-none focus:ring-2 focus:ring-rose-500 text-xs"
+                />
+                {movieSearchQuery && (
+                  <button
+                    type="button"
+                    onClick={() => setMovieSearchQuery("")}
+                    className="absolute right-2.5 top-1/2 -translate-y-1/2 p-1 text-neutral-400 hover:text-white rounded"
+                    title="Clear search"
+                  >
+                    <X className="w-3.5 h-3.5" />
+                  </button>
+                )}
+              </div>
+
+              {/* Movie Search Results */}
+              {filteredMovies.length > 0 ? (
+                <div className="space-y-2 max-h-52 overflow-y-auto pr-1">
+                  {filteredMovies.map((m) => {
+                    const isSelected = selectedMovieId === m.id;
+                    return (
+                      <div
+                        key={m.id}
+                        onClick={() => setSelectedMovieId(m.id)}
+                        className={`flex items-center gap-3 p-2.5 rounded-xl border cursor-pointer transition ${
+                          isSelected
+                            ? "bg-rose-500/15 border-rose-500 text-white shadow-sm"
+                            : "bg-neutral-950/60 border-neutral-800 text-neutral-300 hover:border-neutral-700 hover:bg-neutral-950"
+                        }`}
+                      >
+                        {m.poster ? (
+                          <img
+                            src={m.poster}
+                            alt={m.Title}
+                            className="w-10 h-14 object-cover rounded-md shrink-0 bg-neutral-800"
+                            referrerPolicy="no-referrer"
+                          />
+                        ) : (
+                          <div className="w-10 h-14 bg-neutral-800 rounded-md flex items-center justify-center shrink-0">
+                            <Film className="w-4 h-4 text-neutral-500" />
+                          </div>
+                        )}
+                        <div className="flex-1 min-w-0">
+                          <div className="flex items-center justify-between gap-2">
+                            <p className="text-sm font-semibold truncate">{m.Title}</p>
+                            {isSelected && (
+                              <span className="shrink-0 p-1 bg-rose-600 rounded-full text-white">
+                                <Check className="w-2.5 h-2.5" />
+                              </span>
+                            )}
+                          </div>
+                          <p className="text-xs text-neutral-400">{m.genre} • {m.year}</p>
+                          {m.description && (
+                            <p className="text-[11px] text-neutral-500 line-clamp-1 mt-0.5">
+                              {m.description}
+                            </p>
+                          )}
                         </div>
-                      )}
-                      <div className="truncate">
-                        <p className="text-sm font-semibold truncate">{m.Title}</p>
-                        <p className="text-xs text-neutral-400">{m.genre} • {m.year}</p>
                       </div>
-                    </div>
-                  ))}
+                    );
+                  })}
                 </div>
               ) : (
-                <p className="text-xs text-neutral-400 p-3 bg-neutral-950 rounded-xl">
-                  No movies in library yet. You can upload one or use a Direct URL / Local file!
-                </p>
+                <div className="text-center py-6 px-4 bg-neutral-950 rounded-xl border border-neutral-800">
+                  <Film className="w-6 h-6 text-neutral-600 mx-auto mb-1.5" />
+                  <p className="text-xs font-semibold text-neutral-300">No movies found</p>
+                  <p className="text-[11px] text-neutral-500 mt-0.5">
+                    {movieSearchQuery
+                      ? `No movies match "${movieSearchQuery}". Try another keyword or add a direct URL.`
+                      : "No movies in library yet. You can upload one or use a Direct URL / Local file!"}
+                  </p>
+                </div>
               )}
             </div>
           )}

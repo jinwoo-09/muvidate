@@ -5,6 +5,7 @@ import { ref, onValue, off, update, set } from "firebase/database";
 import { Room, RoomParticipant } from "../types";
 import { VideoPlayer } from "./VideoPlayer";
 import { RoomChat } from "./RoomChat";
+import { ChangeMediaModal } from "./ChangeMediaModal";
 import { 
   Copy, 
   Check, 
@@ -19,7 +20,8 @@ import {
   Film, 
   CheckCircle2, 
   Clock, 
-  ArrowLeft 
+  ArrowLeft,
+  RefreshCw 
 } from "lucide-react";
 
 interface WatchRoomProps {
@@ -43,6 +45,7 @@ export function WatchRoom({ roomCode, initialOfflineFile, onLeaveRoom }: WatchRo
   const [shared, setShared] = useState(false);
   const [activeTab, setActiveTab] = useState<"chat" | "participants">("chat");
   const [showParticipantsMobile, setShowParticipantsMobile] = useState(false);
+  const [isChangeMediaOpen, setIsChangeMediaOpen] = useState(false);
 
   // Throttled sync updates
   const lastSyncWriteTime = useRef<number>(0);
@@ -52,6 +55,12 @@ export function WatchRoom({ roomCode, initialOfflineFile, onLeaveRoom }: WatchRo
     if (!room) return "";
     return room.movieSource === "offline" ? (localVideoUrl || "") : (room.movieUrl || "");
   }, [room?.movieSource, room?.movieUrl, localVideoUrl]);
+
+  const handleOfflineFileSelected = useCallback((file: File) => {
+    const url = URL.createObjectURL(file);
+    setLocalVideoUrl(url);
+    setLocalFileName(file.name);
+  }, []);
 
   // Handle initial offline file if host passed it during creation
   useEffect(() => {
@@ -359,6 +368,16 @@ export function WatchRoom({ roomCode, initialOfflineFile, onLeaveRoom }: WatchRo
             )}
           </div>
 
+          {/* Change Media Option */}
+          <button
+            onClick={() => setIsChangeMediaOpen(true)}
+            className="flex items-center gap-1.5 px-3 py-1.5 rounded-xl text-xs font-semibold bg-neutral-800 hover:bg-neutral-750 text-neutral-200 hover:text-white border border-neutral-700 transition shadow-sm hover:border-rose-500/50"
+            title="Change Media Source (Search, MP4 URL, Offline Video)"
+          >
+            <RefreshCw className="w-3.5 h-3.5 text-rose-400" />
+            <span>Change Media</span>
+          </button>
+
           {/* Host Admin Controls Lock Toggle */}
           {isHost ? (
             <button
@@ -454,18 +473,25 @@ export function WatchRoom({ roomCode, initialOfflineFile, onLeaveRoom }: WatchRo
             </div>
           </div>
 
-          <div className="flex items-center gap-3">
+          <div className="flex items-center gap-2.5 flex-wrap">
+            <button
+              onClick={() => setIsChangeMediaOpen(true)}
+              className="px-4 py-2 bg-rose-600 hover:bg-rose-500 text-white text-xs font-semibold rounded-xl transition flex items-center gap-1.5 shadow"
+            >
+              <RefreshCw className="w-3.5 h-3.5" />
+              <span>Change Media</span>
+            </button>
             {isHost && (
               <button
                 onClick={handleReplayMovie}
-                className="px-4 py-2 bg-rose-600 hover:bg-rose-500 text-white text-xs font-semibold rounded-xl transition"
+                className="px-4 py-2 bg-neutral-800 hover:bg-neutral-750 text-white text-xs font-semibold rounded-xl transition"
               >
                 Replay Movie
               </button>
             )}
             <button
               onClick={onLeaveRoom}
-              className="px-4 py-2 bg-neutral-800 hover:bg-neutral-700 text-white text-xs font-semibold rounded-xl transition"
+              className="px-4 py-2 bg-neutral-800 hover:bg-neutral-700 text-neutral-300 hover:text-white text-xs font-semibold rounded-xl transition"
             >
               Browse Movies
             </button>
@@ -497,6 +523,13 @@ export function WatchRoom({ roomCode, initialOfflineFile, onLeaveRoom }: WatchRo
               <p className="text-xs text-neutral-400 max-w-md mt-1 mb-4">
                 Please select your local copy of "{room.offlineFileName || room.movieTitle}" using the button above to begin playback.
               </p>
+              <button
+                onClick={() => setIsChangeMediaOpen(true)}
+                className="px-4 py-2 bg-neutral-800 hover:bg-neutral-700 text-rose-400 text-xs font-semibold rounded-xl border border-neutral-700 transition flex items-center gap-1.5"
+              >
+                <RefreshCw className="w-3.5 h-3.5" />
+                <span>Or Switch to Another Media</span>
+              </button>
             </div>
           )}
 
@@ -514,9 +547,18 @@ export function WatchRoom({ roomCode, initialOfflineFile, onLeaveRoom }: WatchRo
               </div>
             </div>
 
-            <div className="flex items-center gap-2 text-neutral-400 text-[11px]">
-              <Clock className="w-3.5 h-3.5" />
-              <span>Room expires in 24 hours</span>
+            <div className="flex items-center gap-2">
+              <button
+                onClick={() => setIsChangeMediaOpen(true)}
+                className="flex items-center gap-1.5 px-3 py-1.5 rounded-xl text-xs font-semibold bg-rose-600/15 text-rose-300 border border-rose-500/30 hover:bg-rose-600 hover:text-white transition shadow-sm"
+              >
+                <RefreshCw className="w-3.5 h-3.5" />
+                <span>Change Media</span>
+              </button>
+              <div className="flex items-center gap-1.5 text-neutral-400 text-[11px] bg-neutral-950 px-2.5 py-1.5 rounded-xl border border-neutral-800">
+                <Clock className="w-3.5 h-3.5" />
+                <span>24h Expiry</span>
+              </div>
             </div>
           </div>
         </div>
@@ -619,6 +661,17 @@ export function WatchRoom({ roomCode, initialOfflineFile, onLeaveRoom }: WatchRo
           </div>
         </div>
       </div>
+
+      {/* Change Media Modal */}
+      <ChangeMediaModal
+        isOpen={isChangeMediaOpen}
+        onClose={() => setIsChangeMediaOpen(false)}
+        roomCode={roomCode}
+        currentMovieTitle={room.movieTitle}
+        isHost={isHost}
+        controlsLocked={room.controlsLocked}
+        onOfflineFileSelected={handleOfflineFileSelected}
+      />
     </div>
   );
 }
