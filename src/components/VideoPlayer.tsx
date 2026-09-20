@@ -79,6 +79,30 @@ function VideoPlayerComponent({
   const [availableAudioTracks, setAvailableAudioTracks] = useState<any[]>([]);
   const [currentAudioTrack, setCurrentAudioTrack] = useState(0);
 
+  // Auto-hiding Real-time Sync Indicator state
+  const [showSyncIndicator, setShowSyncIndicator] = useState(false);
+  const syncIndicatorTimerRef = useRef<number | null>(null);
+
+  const triggerSyncIndicator = useCallback(() => {
+    setShowSyncIndicator(true);
+    if (syncIndicatorTimerRef.current) {
+      clearTimeout(syncIndicatorTimerRef.current);
+    }
+    syncIndicatorTimerRef.current = window.setTimeout(() => {
+      setShowSyncIndicator(false);
+      syncIndicatorTimerRef.current = null;
+    }, 2000);
+  }, []);
+
+  // Cleanup sync indicator timer on unmount
+  useEffect(() => {
+    return () => {
+      if (syncIndicatorTimerRef.current) {
+        clearTimeout(syncIndicatorTimerRef.current);
+      }
+    };
+  }, []);
+
   const controlsTimeoutRef = useRef<number | null>(null);
   const isSeekingRef = useRef(false);
   const lastEmittedState = useRef<{ isPlaying: boolean; currentTime: number } | null>(null);
@@ -182,10 +206,12 @@ function VideoPlayerComponent({
       : syncState.currentTime;
 
     // Check drift tolerance (1.5 seconds) against expected current playback time
+    let hasMeaningfulSync = false;
     const timeDiff = Math.abs(video.currentTime - expectedTime);
     if (timeDiff > 1.5) {
       video.currentTime = expectedTime;
       setCurrentTime(expectedTime);
+      hasMeaningfulSync = true;
     }
 
     // Match play/pause state
@@ -194,23 +220,31 @@ function VideoPlayerComponent({
         // Autoplay policy fallback: muted play or wait for interaction
         console.warn("Autoplay blocked by browser until user gesture");
       });
+      hasMeaningfulSync = true;
     } else if (!syncState.isPlaying && !video.paused) {
       video.pause();
+      hasMeaningfulSync = true;
     }
 
     // Match audio track index if provided and supported
     if (
       syncState.audioTrackIndex !== undefined &&
       (video as any).audioTracks &&
-      (video as any).audioTracks.length > syncState.audioTrackIndex
+      (video as any).audioTracks.length > syncState.audioTrackIndex &&
+      currentAudioTrack !== syncState.audioTrackIndex
     ) {
       const audioTracks = (video as any).audioTracks;
       for (let i = 0; i < audioTracks.length; i++) {
         audioTracks[i].enabled = i === syncState.audioTrackIndex;
       }
       setCurrentAudioTrack(syncState.audioTrackIndex);
+      hasMeaningfulSync = true;
     }
-  }, [syncState, currentUserId]);
+
+    if (hasMeaningfulSync) {
+      triggerSyncIndicator();
+    }
+  }, [syncState, currentUserId, currentAudioTrack, triggerSyncIndicator]);
 
   // Video listeners: mounted with [src] to prevent teardown/re-attach on unrelated renders (e.g. chat)
   useEffect(() => {
@@ -544,6 +578,7 @@ function VideoPlayerComponent({
 
   const emitPlaybackState = (newPlaying: boolean, newTime: number) => {
     if (!canControl) return;
+    triggerSyncIndicator();
     lastEmittedState.current = { isPlaying: newPlaying, currentTime: newTime };
     if (onPlaybackChange) {
       onPlaybackChange({ isPlaying: newPlaying, currentTime: newTime });
@@ -620,6 +655,7 @@ function VideoPlayerComponent({
       }
       setCurrentAudioTrack(trackIndex);
       if (onAudioTrackChange && canControl) {
+        triggerSyncIndicator();
         onAudioTrackChange(trackIndex);
       }
     } else {
@@ -792,11 +828,13 @@ function VideoPlayerComponent({
         )}
       </div>
 
-      {/* Real-time Sync Indicator */}
-      <div className="absolute top-4 right-4 z-20 flex items-center gap-1.5 px-3 py-1 rounded-full bg-black/60 backdrop-blur-md border border-neutral-700/80 text-emerald-400 text-[11px] font-mono shadow-md">
-        <Radio className="w-3 h-3 animate-pulse text-emerald-400" />
-        <span>Sync Active</span>
-      </div>
+      {/* Real-time Sync Indicator (auto-hides after temporary timeout) */}
+      {showSyncIndicator && (
+        <div className="absolute top-4 right-4 z-20 flex items-center gap-1.5 px-3 py-1 rounded-full bg-black/80 backdrop-blur-md border border-emerald-500/40 text-emerald-400 text-[11px] font-mono shadow-md transition-opacity duration-300">
+          <Radio className="w-3 h-3 animate-pulse text-emerald-400" />
+          <span>Sync Active</span>
+        </div>
+      )}
 
       {/* Centered Large Play/Pause Animation Overlay (only visible to controllers when paused) */}
       <div

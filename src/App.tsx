@@ -21,7 +21,9 @@ import {
   Search, 
   SlidersHorizontal,
   Flame,
-  Instagram
+  Instagram,
+  Smartphone,
+  Download
 } from "lucide-react";
 
 function MainContent() {
@@ -352,8 +354,8 @@ function MainContent() {
       </main>
 
       {/* Footer */}
-      <footer className="mt-auto border-t border-neutral-900 bg-neutral-950 py-6 text-center text-xs text-neutral-500">
-        <div className="max-w-7xl mx-auto px-4 flex flex-col sm:flex-row items-center justify-between gap-4">
+      <footer className="mt-auto border-t border-neutral-900 bg-neutral-950 py-7 text-center text-xs text-neutral-500">
+        <div className="max-w-7xl mx-auto px-4 flex flex-col md:flex-row items-center justify-between gap-4">
           <div className="flex flex-col sm:flex-row items-center gap-2 sm:gap-4">
             <p>© {new Date().getFullYear()} MuviDate • Watch Together In Sync</p>
             <span className="hidden sm:inline text-neutral-750">•</span>
@@ -367,6 +369,23 @@ function MainContent() {
             >
               <Instagram className="w-3.5 h-3.5 text-rose-500 group-hover:scale-110 transition-transform" />
               <span>Developer: <strong className="text-white font-medium group-hover:text-rose-400">Ashuuxoo</strong></span>
+            </a>
+          </div>
+
+          {/* Android App Download Action */}
+          <div className="flex items-center gap-3">
+            <a
+              href="https://github.com/jinwoo-09/muvidate/releases/download/1.0/Muvidate_1.0.apk"
+              download
+              className="inline-flex items-center gap-2 px-3.5 py-1.5 rounded-full bg-gradient-to-r from-emerald-950/60 via-neutral-900 to-rose-950/30 hover:from-emerald-900/80 hover:to-neutral-800 text-neutral-200 hover:text-white border border-emerald-500/40 hover:border-emerald-400 transition shadow-sm font-medium group"
+              title="Download MuviDate APK for Android"
+            >
+              <Smartphone className="w-3.5 h-3.5 text-emerald-400 group-hover:scale-110 transition-transform" />
+              <span>Download Android App</span>
+              <span className="text-[10px] uppercase font-mono px-1.5 py-0.2 rounded bg-emerald-900/60 text-emerald-300 font-semibold border border-emerald-700/50 flex items-center gap-0.5">
+                <Download className="w-2.5 h-2.5" />
+                APK
+              </span>
             </a>
           </div>
 

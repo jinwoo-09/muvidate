@@ -19,44 +19,57 @@ export interface WorkerResponse {
   error?: string;
 }
 
-export async function uploadFileToWorker(
+export function uploadFileToWorker(
   file: File | Blob,
   fileName?: string,
   onProgress?: (percent: number) => void
 ): Promise<string> {
-  const finalName = fileName || (file instanceof File ? file.name : "upload.bin");
-  const formData = new FormData();
-  formData.append("files[]", file, finalName);
+  return new Promise((resolve, reject) => {
+    const finalName = fileName || (file instanceof File ? file.name : "upload.bin");
+    const formData = new FormData();
+    formData.append("files[]", file, finalName);
 
-  if (onProgress) {
-    onProgress(15);
-  }
+    const xhr = new XMLHttpRequest();
+    xhr.open("POST", WORKER_URL, true);
+    xhr.setRequestHeader("Accept", "application/json");
 
-  const response = await fetch(WORKER_URL, {
-    method: "POST",
-    headers: {
-      Accept: "application/json"
-    },
-    body: formData
+    if (xhr.upload && onProgress) {
+      xhr.upload.onprogress = (event) => {
+        if (event.lengthComputable && event.total > 0) {
+          const percent = Math.min(100, Math.round((event.loaded / event.total) * 100));
+          onProgress(percent);
+        }
+      };
+    }
+
+    xhr.onload = () => {
+      if (xhr.status >= 200 && xhr.status < 300) {
+        try {
+          const result: WorkerResponse = JSON.parse(xhr.responseText);
+          if (!result.success || !result.files || result.files.length === 0) {
+            reject(new Error(result.error || "File upload failed: No file URL returned by Worker API."));
+            return;
+          }
+          if (onProgress) {
+            onProgress(100);
+          }
+          resolve(result.files[0].url);
+        } catch (err: any) {
+          reject(new Error("Invalid response received from upload server."));
+        }
+      } else {
+        reject(new Error(`Upload server returned HTTP ${xhr.status}`));
+      }
+    };
+
+    xhr.onerror = () => {
+      reject(new Error("Network connection error during file upload. Please try again."));
+    };
+
+    xhr.ontimeout = () => {
+      reject(new Error("File upload timed out. Please try again."));
+    };
+
+    xhr.send(formData);
   });
-
-  if (onProgress) {
-    onProgress(75);
-  }
-
-  if (!response.ok) {
-    throw new Error(`Upload server returned HTTP ${response.status}`);
-  }
-
-  const result: WorkerResponse = await response.json();
-
-  if (!result.success || !result.files || result.files.length === 0) {
-    throw new Error(result.error || "File upload failed: No file URL returned by Worker API.");
-  }
-
-  if (onProgress) {
-    onProgress(100);
-  }
-
-  return result.files[0].url;
 }

@@ -67,7 +67,8 @@ export function UploadMovieModal({ isOpen, onClose, onMovieAdded }: UploadMovieM
   const [movieUrlInput, setMovieUrlInput] = useState("");
 
   const [isUploading, setIsUploading] = useState(false);
-  const [uploadStep, setUploadStep] = useState<string>("");
+  const [uploadProgress, setUploadProgress] = useState<number | null>(null);
+  const [uploadStatusText, setUploadStatusText] = useState<string>("");
   const [error, setError] = useState<string | null>(null);
   const [success, setSuccess] = useState(false);
 
@@ -261,26 +262,39 @@ export function UploadMovieModal({ isOpen, onClose, onMovieAdded }: UploadMovieM
     }
 
     setIsUploading(true);
+    setUploadProgress(null);
+    setUploadStatusText("");
     try {
       // 1. Upload Poster if file provided
       let finalPosterUrl = posterUrl.trim();
       if (posterMode === "upload" && posterFile) {
-        setUploadStep("Uploading poster to Worker API...");
+        setUploadStatusText("Uploading portrait poster...");
         finalPosterUrl = await uploadFileToWorker(posterFile, posterFile.name);
       }
 
       // 2. Obtain Movie URL (Worker upload for file, or direct URL)
       let finalMovieUrl = "";
       if (movieSourceMode === "file") {
-        setUploadStep(`Uploading MP4 movie "${movieFile!.name}" (${(movieFile!.size / (1024 * 1024)).toFixed(1)} MB)...`);
-        finalMovieUrl = await uploadFileToWorker(movieFile!, movieFile!.name);
+        setUploadProgress(0);
+        setUploadStatusText("Uploading… 0%");
+        finalMovieUrl = await uploadFileToWorker(movieFile!, movieFile!.name, (percent) => {
+          setUploadProgress(percent);
+          if (percent < 100) {
+            setUploadStatusText(`Uploading… ${percent}%`);
+          } else {
+            setUploadStatusText("Processing/Publishing…");
+          }
+        });
+        setUploadStatusText("Processing/Publishing…");
       } else {
-        // Option B: MP4 URL - stored directly in existing `url` field without Worker upload
+        // Option B: MP4 URL - stored directly in existing `url` field without file upload
+        setUploadProgress(null);
+        setUploadStatusText("Processing/Publishing…");
         finalMovieUrl = movieUrlInput.trim();
       }
 
       // 3. Save into Firestore `movie` collection with comma-separated genres for complete compatibility
-      setUploadStep("Saving movie metadata into Firestore...");
+      setUploadStatusText("Saving movie metadata to Firestore...");
       await addMovieToFirestore({
         Title: title.trim(),
         genre: selectedGenres.join(", "),
@@ -300,7 +314,8 @@ export function UploadMovieModal({ isOpen, onClose, onMovieAdded }: UploadMovieM
       setError(err.message || "Failed to upload movie. Please check your network and try again.");
     } finally {
       setIsUploading(false);
-      setUploadStep("");
+      setUploadProgress(null);
+      setUploadStatusText("");
     }
   };
 
@@ -714,13 +729,38 @@ export function UploadMovieModal({ isOpen, onClose, onMovieAdded }: UploadMovieM
 
           {/* Upload Progress */}
           {isUploading && (
-            <div className="p-4 bg-rose-500/10 border border-rose-500/20 rounded-xl">
-              <div className="flex items-center gap-3 text-rose-400 mb-2">
-                <Loader2 className="w-5 h-5 animate-spin" />
-                <span className="text-sm font-medium">{uploadStep || "Uploading movie via Worker API..."}</span>
+            <div className="p-4 bg-rose-500/10 border border-rose-500/20 rounded-xl space-y-2.5">
+              <div className="flex items-center justify-between text-xs">
+                <div className="flex items-center gap-2 text-rose-400 font-semibold">
+                  <Loader2 className="w-4 h-4 animate-spin" />
+                  <span>
+                    {uploadStatusText ||
+                      (uploadProgress !== null
+                        ? uploadProgress < 100
+                          ? `Uploading… ${uploadProgress}%`
+                          : "Processing/Publishing…"
+                        : "Processing movie...")}
+                  </span>
+                </div>
+                {uploadProgress !== null && (
+                  <span className="font-mono text-rose-300 font-bold">{uploadProgress}%</span>
+                )}
               </div>
-              <p className="text-xs text-neutral-400">
-                Please do not close this window while large video files are processing.
+
+              {/* Visual Progress Bar (when uploading MP4 file) */}
+              {uploadProgress !== null && (
+                <div className="w-full h-2.5 bg-neutral-950 border border-neutral-800 rounded-full overflow-hidden">
+                  <div
+                    className="h-full bg-gradient-to-r from-rose-600 via-rose-500 to-amber-500 transition-all duration-300 rounded-full"
+                    style={{ width: `${Math.max(3, uploadProgress)}%` }}
+                  />
+                </div>
+              )}
+
+              <p className="text-[11px] text-neutral-400 leading-relaxed">
+                {movieSourceMode === "file" && movieFile
+                  ? `Uploading MP4 "${movieFile.name}" (${(movieFile.size / (1024 * 1024)).toFixed(1)} MB) via Worker API. Please keep this tab open.`
+                  : "Please do not close this window while the movie is publishing to MuviDate."}
               </p>
             </div>
           )}
@@ -731,19 +771,23 @@ export function UploadMovieModal({ isOpen, onClose, onMovieAdded }: UploadMovieM
               type="button"
               onClick={onClose}
               disabled={isUploading}
-              className="px-5 py-2.5 text-neutral-300 hover:text-white text-sm font-medium rounded-xl hover:bg-neutral-800 transition disabled:opacity-50"
+              className="px-5 py-2.5 text-neutral-300 hover:text-white text-sm font-medium rounded-xl hover:bg-neutral-800 transition disabled:opacity-50 disabled:cursor-not-allowed"
             >
               Cancel
             </button>
             <button
               type="submit"
               disabled={isUploading}
-              className="px-6 py-2.5 bg-rose-600 hover:bg-rose-500 text-white text-sm font-medium rounded-xl shadow-lg shadow-rose-600/25 transition disabled:opacity-50 flex items-center gap-2"
+              className="px-6 py-2.5 bg-rose-600 hover:bg-rose-500 text-white text-sm font-medium rounded-xl shadow-lg shadow-rose-600/25 transition disabled:opacity-50 disabled:cursor-not-allowed flex items-center gap-2"
             >
               {isUploading ? (
                 <>
                   <Loader2 className="w-4 h-4 animate-spin" />
-                  <span>Processing...</span>
+                  <span>
+                    {uploadProgress !== null && uploadProgress < 100
+                      ? `Uploading… ${uploadProgress}%`
+                      : "Processing/Publishing…"}
+                  </span>
                 </>
               ) : (
                 <span>Publish to MuviDate</span>
