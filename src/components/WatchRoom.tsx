@@ -1,0 +1,573 @@
+import React, { useState, useEffect, useRef } from "react";
+import { useAuth } from "../context/AuthContext";
+import { rtdb } from "../lib/firebase";
+import { ref, onValue, off, update, set } from "firebase/database";
+import { Room, RoomParticipant } from "../types";
+import { VideoPlayer } from "./VideoPlayer";
+import { RoomChat } from "./RoomChat";
+import { 
+  Copy, 
+  Check, 
+  Share2, 
+  Users, 
+  Shield, 
+  Lock, 
+  Unlock, 
+  LogOut, 
+  AlertCircle, 
+  HardDrive, 
+  Film, 
+  CheckCircle2, 
+  Clock, 
+  ArrowLeft 
+} from "lucide-react";
+
+interface WatchRoomProps {
+  roomCode: string;
+  initialOfflineFile?: File;
+  onLeaveRoom: () => void;
+}
+
+export function WatchRoom({ roomCode, initialOfflineFile, onLeaveRoom }: WatchRoomProps) {
+  const { user, profile } = useAuth();
+
+  const [room, setRoom] = useState<Room | null>(null);
+  const [loading, setLoading] = useState(true);
+  const [error, setError] = useState<string | null>(null);
+
+  // Local video state for offline video file
+  const [localVideoUrl, setLocalVideoUrl] = useState<string>("");
+  const [localFileName, setLocalFileName] = useState<string>("");
+
+  const [copied, setCopied] = useState(false);
+  const [shared, setShared] = useState(false);
+  const [activeTab, setActiveTab] = useState<"chat" | "participants">("chat");
+  const [showParticipantsMobile, setShowParticipantsMobile] = useState(false);
+
+  // Throttled sync updates
+  const lastSyncWriteTime = useRef<number>(0);
+
+  // Handle initial offline file if host passed it during creation
+  useEffect(() => {
+    if (initialOfflineFile) {
+      const url = URL.createObjectURL(initialOfflineFile);
+      setLocalVideoUrl(url);
+      setLocalFileName(initialOfflineFile.name);
+      return () => {
+        URL.revokeObjectURL(url);
+      };
+    }
+  }, [initialOfflineFile]);
+
+  // Subscribe to RTDB room changes
+  useEffect(() => {
+    const roomRef = ref(rtdb, `rooms/${roomCode}`);
+
+    const handleRoomData = (snapshot: any) => {
+      setLoading(false);
+      const data = snapshot.val();
+      if (!data) {
+        setError(`Room #${roomCode} does not exist or has been removed.`);
+        return;
+      }
+
+      // Check 24 hour expiration
+      if (data.expiresAt && Date.now() > data.expiresAt) {
+        setError(`Room #${roomCode} has expired (24-hour limit reached).`);
+        return;
+      }
+
+      setRoom(data);
+    };
+
+    onValue(roomRef, handleRoomData);
+
+    // Update participant online status
+    if (user && profile) {
+      const participantRef = ref(rtdb, `rooms/${roomCode}/participants/${user.uid}`);
+      update(participantRef, {
+        isOnline: true,
+        joinedAt: Date.now(),
+        username: profile.username,
+        photoURL: profile.photoURL || ""
+      });
+    }
+
+    return () => {
+      off(roomRef, "value", handleRoomData);
+      if (user) {
+        const participantRef = ref(rtdb, `rooms/${roomCode}/participants/${user.uid}`);
+        update(participantRef, { isOnline: false }).catch(() => {});
+      }
+    };
+  }, [roomCode, user, profile]);
+
+  const isHost = user?.uid === room?.adminUid;
+
+  // Sync state emitter from VideoPlayer
+  const handlePlaybackChange = (state: { isPlaying: boolean; currentTime: number }) => {
+    if (!room || !user || !profile) return;
+    if (room.controlsLocked && !isHost) return;
+
+    const now = Date.now();
+    // Throttle frequent updates to avoid spamming RTDB
+    lastSyncWriteTime.current = now;
+
+    const playbackRef = ref(rtdb, `rooms/${roomCode}/playbackState`);
+    update(playbackRef, {
+      isPlaying: state.isPlaying,
+      currentTime: state.currentTime,
+      lastUpdated: now,
+      updatedBy: user.uid,
+      updatedByUsername: profile.username
+    }).catch(console.error);
+  };
+
+  // Audio track sync
+  const handleAudioTrackChange = (index: number) => {
+    if (!room || !user || !profile) return;
+    if (room.controlsLocked && !isHost) return;
+
+    const playbackRef = ref(rtdb, `rooms/${roomCode}/playbackState`);
+    update(playbackRef, {
+      audioTrackIndex: index,
+      lastUpdated: Date.now(),
+      updatedBy: user.uid,
+      updatedByUsername: profile.username
+    }).catch(console.error);
+  };
+
+  // Admin toggling control lock
+  const handleToggleControlLock = async () => {
+    if (!isHost || !room) return;
+    const roomRef = ref(rtdb, `rooms/${roomCode}`);
+    await update(roomRef, {
+      controlsLocked: !room.controlsLocked
+    });
+  };
+
+  // Handle movie natural completion
+  const handleVideoEnded = async () => {
+    if (!room) return;
+    try {
+      // 1. Mark movie as completed
+      const roomRef = ref(rtdb, `rooms/${roomCode}`);
+      await update(roomRef, {
+        movieCompleted: true,
+        "playbackState/isPlaying": false
+      });
+
+      // 2. Clear room chat/voice notes as required in Section 16 & 17
+      const chatRef = ref(rtdb, `rooms/${roomCode}/chat`);
+      await set(chatRef, null);
+    } catch (err) {
+      console.error("Error finalizing completed movie:", err);
+    }
+  };
+
+  // Replay movie option for host
+  const handleReplayMovie = async () => {
+    if (!isHost || !room) return;
+    const roomRef = ref(rtdb, `rooms/${roomCode}`);
+    await update(roomRef, {
+      movieCompleted: false,
+      "playbackState/isPlaying": false,
+      "playbackState/currentTime": 0
+    });
+  };
+
+  // Copy room code
+  const copyRoomCode = () => {
+    navigator.clipboard.writeText(roomCode);
+    setCopied(true);
+    setTimeout(() => setCopied(false), 2000);
+  };
+
+  // Share using Web Share API or copy
+  const shareRoom = async () => {
+    const shareText = `Join my watch party on MuviDate! Room Code: ${roomCode}`;
+    const shareUrl = window.location.href;
+
+    if (navigator.share) {
+      try {
+        await navigator.share({
+          title: "MuviDate Watch Room",
+          text: shareText,
+          url: shareUrl
+        });
+        setShared(true);
+        setTimeout(() => setShared(false), 2000);
+        return;
+      } catch (err) {
+        // Fallback to clipboard
+      }
+    }
+    copyRoomCode();
+  };
+
+  // Handle participant selecting their offline file
+  const handleOfflineFileSelect = (e: React.ChangeEvent<HTMLInputElement>) => {
+    const file = e.target.files?.[0];
+    if (!file) return;
+
+    const url = URL.createObjectURL(file);
+    setLocalVideoUrl(url);
+    setLocalFileName(file.name);
+
+    if (user) {
+      const participantRef = ref(rtdb, `rooms/${roomCode}/participants/${user.uid}`);
+      update(participantRef, { hasOfflineFile: true });
+    }
+  };
+
+  if (loading) {
+    return (
+      <div className="flex flex-col items-center justify-center min-h-[70vh] text-center p-6">
+        <div className="w-12 h-12 rounded-full border-4 border-rose-500/20 border-t-rose-500 animate-spin mb-4" />
+        <h3 className="text-lg font-bold text-white">Connecting to Watch Room #{roomCode}...</h3>
+        <p className="text-xs text-neutral-400 mt-1">Synchronizing room state and media stream</p>
+      </div>
+    );
+  }
+
+  if (error || !room) {
+    return (
+      <div className="flex flex-col items-center justify-center min-h-[70vh] text-center p-6 max-w-md mx-auto">
+        <div className="p-3 bg-rose-500/10 border border-rose-500/30 rounded-2xl text-rose-400 mb-4">
+          <AlertCircle className="w-8 h-8" />
+        </div>
+        <h3 className="text-xl font-bold font-heading text-white mb-2">Room Inactive</h3>
+        <p className="text-sm text-neutral-400 mb-6">{error || "This watch room is no longer accessible."}</p>
+        <button
+          onClick={onLeaveRoom}
+          className="px-6 py-2.5 bg-neutral-800 hover:bg-neutral-700 text-white text-xs font-semibold rounded-xl transition flex items-center gap-2"
+        >
+          <ArrowLeft className="w-4 h-4" />
+          <span>Back to Home</span>
+        </button>
+      </div>
+    );
+  }
+
+  // Determine video playback source
+  const isOfflineSource = room.movieSource === "offline";
+  const effectiveVideoSrc = isOfflineSource ? localVideoUrl : room.movieUrl;
+
+  const participantsList = room.participants ? Object.values(room.participants) : [];
+  const activeParticipantsCount = participantsList.filter((p) => p.isOnline).length;
+
+  return (
+    <div className="max-w-7xl mx-auto px-3 sm:px-6 py-4 space-y-4">
+      {/* Top Navigation & Status Bar */}
+      <div className="flex flex-wrap items-center justify-between gap-3 p-3 bg-neutral-900/90 border border-neutral-800 rounded-2xl backdrop-blur-md">
+        <div className="flex items-center gap-3">
+          <button
+            onClick={onLeaveRoom}
+            className="p-2 text-neutral-400 hover:text-white rounded-xl hover:bg-neutral-800 transition flex items-center gap-1.5 text-xs font-semibold"
+            title="Leave Room"
+          >
+            <LogOut className="w-4 h-4" />
+            <span className="hidden sm:inline">Leave Room</span>
+          </button>
+
+          <div className="h-4 w-px bg-neutral-800" />
+
+          {/* Room Code Badge */}
+          <div className="flex items-center gap-2 bg-neutral-950 px-3 py-1.5 rounded-xl border border-neutral-800">
+            <span className="text-[10px] uppercase font-bold tracking-wider text-neutral-400">
+              Code:
+            </span>
+            <span className="font-mono text-base font-extrabold tracking-widest text-white">
+              {room.roomCode}
+            </span>
+            <button
+              onClick={copyRoomCode}
+              className="p-1 text-neutral-400 hover:text-white rounded transition"
+              title="Copy 4-digit code"
+            >
+              {copied ? <Check className="w-3.5 h-3.5 text-emerald-400" /> : <Copy className="w-3.5 h-3.5" />}
+            </button>
+            <button
+              onClick={shareRoom}
+              className="p-1 text-neutral-400 hover:text-white rounded transition"
+              title="Share Room"
+            >
+              <Share2 className="w-3.5 h-3.5" />
+            </button>
+          </div>
+        </div>
+
+        {/* Center/Right: Movie Title & Host Controls */}
+        <div className="flex items-center gap-2.5 sm:gap-4 flex-wrap">
+          <div className="flex items-center gap-2">
+            <span className="text-xs font-bold text-white truncate max-w-[180px] sm:max-w-xs">
+              {room.movieTitle}
+            </span>
+            {isOfflineSource && (
+              <span className="px-2 py-0.5 rounded-full text-[10px] font-semibold bg-amber-500/15 text-amber-400 border border-amber-500/30">
+                Offline Video
+              </span>
+            )}
+          </div>
+
+          {/* Host Admin Controls Lock Toggle */}
+          {isHost ? (
+            <button
+              onClick={handleToggleControlLock}
+              className={`flex items-center gap-1.5 px-3 py-1.5 rounded-xl text-xs font-semibold transition border ${
+                room.controlsLocked
+                  ? "bg-rose-500/15 border-rose-500 text-rose-300"
+                  : "bg-neutral-800 border-neutral-700 text-neutral-300 hover:text-white"
+              }`}
+              title="Toggle whether participants can play/pause/seek"
+            >
+              {room.controlsLocked ? (
+                <>
+                  <Lock className="w-3.5 h-3.5 text-rose-400" />
+                  <span>Controls: Host Only</span>
+                </>
+              ) : (
+                <>
+                  <Unlock className="w-3.5 h-3.5 text-neutral-400" />
+                  <span>Controls: Open</span>
+                </>
+              )}
+            </button>
+          ) : (
+            <div className="flex items-center gap-1.5 text-xs text-neutral-400 px-2 py-1 rounded-lg bg-neutral-950">
+              {room.controlsLocked ? (
+                <>
+                  <Lock className="w-3.5 h-3.5 text-amber-400" />
+                  <span className="text-[11px]">Host Controls Locked</span>
+                </>
+              ) : (
+                <>
+                  <Unlock className="w-3.5 h-3.5 text-emerald-400" />
+                  <span className="text-[11px]">Controls Open</span>
+                </>
+              )}
+            </div>
+          )}
+
+          {/* Online count */}
+          <div className="flex items-center gap-1.5 text-xs text-neutral-300 bg-neutral-950 px-2.5 py-1.5 rounded-xl border border-neutral-800">
+            <Users className="w-3.5 h-3.5 text-rose-500" />
+            <span>{activeParticipantsCount} online</span>
+          </div>
+        </div>
+      </div>
+
+      {/* Offline Video Prompt for Participants */}
+      {isOfflineSource && !localVideoUrl && (
+        <div className="p-4 sm:p-5 bg-amber-500/10 border border-amber-500/30 rounded-2xl animate-in fade-in">
+          <div className="flex flex-col sm:flex-row items-start sm:items-center justify-between gap-4">
+            <div className="flex items-start gap-3">
+              <div className="p-2.5 bg-amber-500/20 text-amber-400 rounded-xl shrink-0 mt-0.5">
+                <HardDrive className="w-5 h-5" />
+              </div>
+              <div>
+                <h4 className="text-sm font-bold text-white">
+                  This room is using an offline video file
+                </h4>
+                <p className="text-xs text-neutral-300 mt-1 leading-relaxed">
+                  Expected file: <strong className="text-amber-300">"{room.offlineFileName || room.movieTitle}"</strong>.
+                  Select the same video file from your device to watch together with synchronized playback.
+                </p>
+              </div>
+            </div>
+
+            <label className="px-4 py-2.5 bg-amber-600 hover:bg-amber-500 text-white text-xs font-semibold rounded-xl shadow-lg cursor-pointer transition shrink-0 flex items-center gap-2">
+              <HardDrive className="w-4 h-4" />
+              <span>Select File on Your Device</span>
+              <input
+                type="file"
+                accept="video/*"
+                className="hidden"
+                onChange={handleOfflineFileSelect}
+              />
+            </label>
+          </div>
+        </div>
+      )}
+
+      {/* Movie Completed Banner */}
+      {room.movieCompleted && (
+        <div className="p-5 bg-gradient-to-r from-neutral-900 to-neutral-850 border border-neutral-750 rounded-2xl shadow-xl flex flex-col sm:flex-row items-center justify-between gap-4">
+          <div className="flex items-center gap-3">
+            <div className="p-2.5 bg-emerald-500/15 text-emerald-400 rounded-xl shrink-0">
+              <CheckCircle2 className="w-6 h-6" />
+            </div>
+            <div>
+              <h4 className="text-base font-bold text-white">The movie has finished!</h4>
+              <p className="text-xs text-neutral-400 mt-0.5">
+                Watch session ended. Real-time chat & voice notes have been cleared.
+              </p>
+            </div>
+          </div>
+
+          <div className="flex items-center gap-3">
+            {isHost && (
+              <button
+                onClick={handleReplayMovie}
+                className="px-4 py-2 bg-rose-600 hover:bg-rose-500 text-white text-xs font-semibold rounded-xl transition"
+              >
+                Replay Movie
+              </button>
+            )}
+            <button
+              onClick={onLeaveRoom}
+              className="px-4 py-2 bg-neutral-800 hover:bg-neutral-700 text-white text-xs font-semibold rounded-xl transition"
+            >
+              Browse Movies
+            </button>
+          </div>
+        </div>
+      )}
+
+      {/* Main Watch Room Grid: Video Player (Left) + Chat / Participants (Right) */}
+      <div className="grid grid-cols-1 lg:grid-cols-12 gap-4">
+        {/* Video Player Column */}
+        <div className="lg:col-span-8 space-y-4">
+          {effectiveVideoSrc ? (
+            <VideoPlayer
+              src={effectiveVideoSrc}
+              poster={room.moviePoster}
+              isHost={isHost}
+              controlsLocked={room.controlsLocked}
+              syncState={room.playbackState}
+              onPlaybackChange={handlePlaybackChange}
+              onAudioTrackChange={handleAudioTrackChange}
+              onVideoEnded={handleVideoEnded}
+            />
+          ) : (
+            <div className="w-full aspect-video bg-neutral-900/90 border border-neutral-800 rounded-2xl flex flex-col items-center justify-center p-6 text-center">
+              <HardDrive className="w-12 h-12 text-neutral-600 mb-3" />
+              <h4 className="text-base font-bold text-white">Offline Video Needed</h4>
+              <p className="text-xs text-neutral-400 max-w-md mt-1 mb-4">
+                Please select your local copy of "{room.offlineFileName || room.movieTitle}" using the button above to begin playback.
+              </p>
+            </div>
+          )}
+
+          {/* Room Details Accordion / Info Card */}
+          <div className="p-4 bg-neutral-900/80 border border-neutral-800 rounded-2xl backdrop-blur-sm flex flex-wrap items-center justify-between gap-3 text-xs">
+            <div className="flex items-center gap-3">
+              <div className="w-8 h-8 rounded-xl bg-neutral-800 flex items-center justify-center text-rose-500 font-bold">
+                <Film className="w-4 h-4" />
+              </div>
+              <div>
+                <p className="font-bold text-white">{room.movieTitle}</p>
+                <p className="text-neutral-400 text-[11px]">
+                  Hosted by <span className="text-neutral-200">@{room.adminUsername}</span>
+                </p>
+              </div>
+            </div>
+
+            <div className="flex items-center gap-2 text-neutral-400 text-[11px]">
+              <Clock className="w-3.5 h-3.5" />
+              <span>Room expires in 24 hours</span>
+            </div>
+          </div>
+        </div>
+
+        {/* Chat & Participants Column */}
+        <div className="lg:col-span-4 flex flex-col h-[520px] lg:h-auto min-h-[480px]">
+          {/* Tabs for Mobile/Desktop */}
+          <div className="flex items-center gap-1 p-1 bg-neutral-950 rounded-xl border border-neutral-800 mb-2">
+            <button
+              onClick={() => setActiveTab("chat")}
+              className={`flex-1 py-1.5 text-xs font-semibold rounded-lg transition ${
+                activeTab === "chat"
+                  ? "bg-rose-600 text-white shadow"
+                  : "text-neutral-400 hover:text-white"
+              }`}
+            >
+              Live Chat
+            </button>
+            <button
+              onClick={() => setActiveTab("participants")}
+              className={`flex-1 py-1.5 text-xs font-semibold rounded-lg transition flex items-center justify-center gap-1.5 ${
+                activeTab === "participants"
+                  ? "bg-rose-600 text-white shadow"
+                  : "text-neutral-400 hover:text-white"
+              }`}
+            >
+              <span>Participants</span>
+              <span className="text-[10px] px-1.5 py-0.2 bg-neutral-800 rounded-full">
+                {participantsList.length}
+              </span>
+            </button>
+          </div>
+
+          {/* Active Tab View */}
+          <div className="flex-1 min-h-0">
+            {activeTab === "chat" ? (
+              <RoomChat
+                roomCode={roomCode}
+                adminUid={room.adminUid}
+                isMovieCompleted={room.movieCompleted}
+              />
+            ) : (
+              <div className="h-full bg-neutral-900/90 border border-neutral-800 rounded-2xl p-4 overflow-y-auto">
+                <h4 className="text-xs font-bold uppercase tracking-wider text-neutral-400 mb-3">
+                  In Watch Room ({participantsList.length})
+                </h4>
+                <div className="space-y-2.5">
+                  {participantsList.map((p) => {
+                    const isUserHost = p.uid === room.adminUid;
+                    const isMe = p.uid === user?.uid;
+                    const initials = p.username ? p.username.slice(0, 2).toUpperCase() : "U";
+
+                    return (
+                      <div
+                        key={p.uid}
+                        className="flex items-center justify-between p-2.5 bg-neutral-950/80 rounded-xl border border-neutral-800"
+                      >
+                        <div className="flex items-center gap-2.5 truncate">
+                          <div className="relative">
+                            <div className="w-8 h-8 rounded-full overflow-hidden bg-neutral-800 border border-neutral-700 flex items-center justify-center text-xs font-bold text-neutral-300">
+                              {p.photoURL ? (
+                                <img
+                                  src={p.photoURL}
+                                  alt={p.username}
+                                  className="w-full h-full object-cover"
+                                  referrerPolicy="no-referrer"
+                                />
+                              ) : (
+                                <span>{initials}</span>
+                              )}
+                            </div>
+                            <span
+                              className={`absolute bottom-0 right-0 w-2.5 h-2.5 rounded-full border-2 border-neutral-900 ${
+                                p.isOnline ? "bg-emerald-500" : "bg-neutral-600"
+                              }`}
+                            />
+                          </div>
+
+                          <div className="truncate">
+                            <p className="text-xs font-semibold text-white truncate">
+                              @{p.username} {isMe && <span className="text-neutral-400 font-normal">(You)</span>}
+                            </p>
+                            <p className="text-[10px] text-neutral-500">
+                              {p.isOnline ? "Active" : "Away"}
+                            </p>
+                          </div>
+                        </div>
+
+                        {isUserHost && (
+                          <span className="flex items-center gap-1 text-[10px] font-bold uppercase tracking-wider bg-amber-500/15 text-amber-400 border border-amber-500/30 px-2 py-0.5 rounded-md">
+                            <Shield className="w-3 h-3" /> Host
+                          </span>
+                        )}
+                      </div>
+                    );
+                  })}
+                </div>
+              </div>
+            )}
+          </div>
+        </div>
+      </div>
+    </div>
+  );
+}

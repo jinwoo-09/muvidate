@@ -1,0 +1,162 @@
+import React, { useState, useRef } from "react";
+import { useAuth } from "../context/AuthContext";
+import { uploadFileToWorker } from "../lib/workerApi";
+import { X, Camera, Loader2, AlertCircle, CheckCircle, Copy, User } from "lucide-react";
+
+interface ProfileModalProps {
+  isOpen: boolean;
+  onClose: () => void;
+}
+
+export function ProfileModal({ isOpen, onClose }: ProfileModalProps) {
+  const { profile, user, updatePhoto } = useAuth();
+  const [uploading, setUploading] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+  const [success, setSuccess] = useState<string | null>(null);
+  const [copied, setCopied] = useState(false);
+  const fileInputRef = useRef<HTMLInputElement>(null);
+
+  if (!isOpen || !profile) return null;
+
+  const handleFileChange = async (e: React.ChangeEvent<HTMLInputElement>) => {
+    const file = e.target.files?.[0];
+    if (!file) return;
+
+    // Validate image format
+    if (!file.type.startsWith("image/")) {
+      setError("Please select a valid image file (PNG, JPG, WebP, GIF).");
+      return;
+    }
+
+    if (file.size > 10 * 1024 * 1024) {
+      setError("Image size exceeds 10MB limit.");
+      return;
+    }
+
+    setError(null);
+    setSuccess(null);
+    setUploading(true);
+
+    try {
+      const photoUrl = await uploadFileToWorker(file, file.name);
+      await updatePhoto(photoUrl);
+      setSuccess("Profile picture updated successfully!");
+    } catch (err: any) {
+      console.error("Avatar upload failed:", err);
+      setError(err.message || "Failed to upload image. Please try again.");
+    } finally {
+      setUploading(false);
+      if (fileInputRef.current) fileInputRef.current.value = "";
+    }
+  };
+
+  const copyUid = () => {
+    if (user?.uid) {
+      navigator.clipboard.writeText(user.uid);
+      setCopied(true);
+      setTimeout(() => setCopied(false), 2000);
+    }
+  };
+
+  const initials = profile.username ? profile.username.slice(0, 2).toUpperCase() : "MD";
+
+  return (
+    <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/80 backdrop-blur-sm animate-in fade-in duration-200">
+      <div className="w-full max-w-md bg-neutral-900 border border-neutral-800 rounded-2xl p-6 shadow-2xl relative">
+        <button
+          onClick={onClose}
+          className="absolute top-4 right-4 p-2 text-neutral-400 hover:text-white rounded-lg hover:bg-neutral-800 transition"
+          aria-label="Close"
+        >
+          <X className="w-5 h-5" />
+        </button>
+
+        <h3 className="text-xl font-bold font-heading text-white mb-6">Your Profile</h3>
+
+        <div className="flex flex-col items-center text-center mb-6">
+          <div className="relative group mb-3">
+            <div className="w-24 h-24 rounded-full overflow-hidden border-2 border-rose-500/50 bg-neutral-800 flex items-center justify-center text-white font-bold text-2xl shadow-xl">
+              {profile.photoURL ? (
+                <img
+                  src={profile.photoURL}
+                  alt={profile.username}
+                  className="w-full h-full object-cover"
+                  referrerPolicy="no-referrer"
+                />
+              ) : (
+                <span className="text-rose-400">{initials}</span>
+              )}
+            </div>
+
+            <button
+              onClick={() => fileInputRef.current?.click()}
+              disabled={uploading}
+              className="absolute bottom-0 right-0 p-2 bg-rose-600 hover:bg-rose-500 text-white rounded-full border-2 border-neutral-900 shadow-md transition disabled:opacity-50"
+              title="Change profile picture"
+            >
+              {uploading ? (
+                <Loader2 className="w-4 h-4 animate-spin" />
+              ) : (
+                <Camera className="w-4 h-4" />
+              )}
+            </button>
+            <input
+              ref={fileInputRef}
+              type="file"
+              accept="image/*"
+              className="hidden"
+              onChange={handleFileChange}
+            />
+          </div>
+
+          <p className="text-xs text-neutral-400">Click the camera icon to upload a new avatar</p>
+          <h4 className="text-xl font-bold text-white mt-3">@{profile.username}</h4>
+          <span className="inline-block mt-1 px-2.5 py-0.5 rounded-full text-[11px] font-medium bg-emerald-500/15 text-emerald-400 border border-emerald-500/30">
+            Anonymous Account Active
+          </span>
+        </div>
+
+        {error && (
+          <div className="flex items-start gap-2 p-3 bg-rose-500/10 border border-rose-500/30 rounded-xl text-rose-300 text-xs mb-4">
+            <AlertCircle className="w-4 h-4 shrink-0 mt-0.5" />
+            <span>{error}</span>
+          </div>
+        )}
+
+        {success && (
+          <div className="flex items-start gap-2 p-3 bg-emerald-500/10 border border-emerald-500/30 rounded-xl text-emerald-300 text-xs mb-4">
+            <CheckCircle className="w-4 h-4 shrink-0 mt-0.5" />
+            <span>{success}</span>
+          </div>
+        )}
+
+        <div className="bg-neutral-950/80 rounded-xl p-4 border border-neutral-800/80 space-y-3">
+          <div>
+            <span className="text-[11px] uppercase tracking-wider text-neutral-400 font-semibold block mb-1">
+              Your Firebase UID
+            </span>
+            <div className="flex items-center justify-between gap-2">
+              <code className="text-xs text-neutral-300 font-mono truncate">{user?.uid}</code>
+              <button
+                onClick={copyUid}
+                className="p-1.5 hover:bg-neutral-800 text-neutral-400 hover:text-white rounded transition shrink-0"
+                title="Copy UID"
+              >
+                {copied ? <CheckCircle className="w-4 h-4 text-emerald-400" /> : <Copy className="w-4 h-4" />}
+              </button>
+            </div>
+          </div>
+        </div>
+
+        <div className="mt-6 flex justify-end">
+          <button
+            onClick={onClose}
+            className="px-5 py-2.5 bg-neutral-800 hover:bg-neutral-700 text-white text-sm font-medium rounded-xl transition"
+          >
+            Done
+          </button>
+        </div>
+      </div>
+    </div>
+  );
+}

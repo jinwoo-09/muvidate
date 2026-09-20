@@ -1,0 +1,7 @@
+{
+  "name": "MuviDate",
+  "description": "Watch movies together synchronously with real-time video sync, live chat, and voice notes.",
+  "requestFramePermissions": ["microphone"],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}
+
