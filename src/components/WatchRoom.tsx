@@ -47,6 +47,12 @@ export function WatchRoom({ roomCode, initialOfflineFile, onLeaveRoom }: WatchRo
   // Throttled sync updates
   const lastSyncWriteTime = useRef<number>(0);
 
+  // Determine video playback source with memoization at top level (unconditional hook execution)
+  const effectiveVideoSrc = useMemo(() => {
+    if (!room) return "";
+    return room.movieSource === "offline" ? (localVideoUrl || "") : (room.movieUrl || "");
+  }, [room?.movieSource, room?.movieUrl, localVideoUrl]);
+
   // Handle initial offline file if host passed it during creation
   useEffect(() => {
     if (initialOfflineFile) {
@@ -295,13 +301,7 @@ export function WatchRoom({ roomCode, initialOfflineFile, onLeaveRoom }: WatchRo
     );
   }
 
-  // Determine video playback source with memoization to prevent unnecessary string/reference recreation
   const isOfflineSource = room.movieSource === "offline";
-  const effectiveVideoSrc = useMemo(() => {
-    if (!room) return "";
-    return room.movieSource === "offline" ? (localVideoUrl || "") : (room.movieUrl || "");
-  }, [room?.movieSource, room?.movieUrl, localVideoUrl]);
-
   const participantsList = room.participants ? Object.values(room.participants) : [];
   const activeParticipantsCount = participantsList.filter((p) => p.isOnline).length;
 
