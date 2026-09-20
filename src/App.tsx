@@ -113,10 +113,27 @@ function MainContent() {
     });
   }, [movies, selectedGenre, searchQuery]);
 
-  // Featured Hero movie (first movie with valid poster or first movie in list)
-  const heroMovie = useMemo(() => {
-    return movies.find((m) => m.poster) || movies[0] || null;
+  // Auto-rotating hero index every 3 seconds among movies
+  const [heroIndex, setHeroIndex] = useState(0);
+
+  // Available movies for hero banner (prioritizing movies that have a poster)
+  const heroCandidates = useMemo(() => {
+    const withPosters = movies.filter((m) => !!m.poster && m.poster.trim() !== "");
+    return withPosters.length > 0 ? withPosters : movies;
   }, [movies]);
+
+  useEffect(() => {
+    if (heroCandidates.length <= 1) return;
+    const interval = setInterval(() => {
+      setHeroIndex((prev) => (prev + 1) % heroCandidates.length);
+    }, 3000);
+    return () => clearInterval(interval);
+  }, [heroCandidates.length]);
+
+  const heroMovie = useMemo(() => {
+    if (heroCandidates.length === 0) return null;
+    return heroCandidates[heroIndex % heroCandidates.length];
+  }, [heroCandidates, heroIndex]);
 
   const handleStartCreateRoom = (movie?: Movie) => {
     setPreselectedMovieForRoom(movie || null);
@@ -387,12 +404,6 @@ function MainContent() {
                 APK
               </span>
             </a>
-          </div>
-
-          <div className="flex items-center gap-3 text-neutral-400">
-            <span>Powered by Firebase RTDB & Firestore</span>
-            <span>•</span>
-            <span>Worker API Uploads</span>
           </div>
         </div>
       </footer>

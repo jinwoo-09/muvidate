@@ -7,8 +7,6 @@ import {
   Users, 
   Calendar, 
   Tag, 
-  Share2, 
-  Check, 
   ArrowLeft, 
   Film 
 } from "lucide-react";
@@ -25,19 +23,12 @@ export function MovieDetailModal({
   onCreateRoom
 }: MovieDetailModalProps) {
   const [isPlayingSolo, setIsPlayingSolo] = useState(false);
-  const [copied, setCopied] = useState(false);
 
   if (!movie) return null;
 
   const genres = movie.genre
     ? movie.genre.split(",").map((g) => g.trim())
     : [];
-
-  const copyUrl = () => {
-    navigator.clipboard.writeText(movie.url);
-    setCopied(true);
-    setTimeout(() => setCopied(false), 2000);
-  };
 
   return (
     <div className="fixed inset-0 z-50 flex items-center justify-center p-3 sm:p-6 bg-black/90 backdrop-blur-md overflow-y-auto">
@@ -144,14 +135,6 @@ export function MovieDetailModal({
                 >
                   <Play className="w-4 h-4 fill-white" />
                   <span>Watch Alone</span>
-                </button>
-
-                <button
-                  onClick={copyUrl}
-                  className="p-3 bg-neutral-950 hover:bg-neutral-800 text-neutral-400 hover:text-white rounded-xl border border-neutral-800 transition"
-                  title="Copy video URL"
-                >
-                  {copied ? <Check className="w-4 h-4 text-emerald-400" /> : <Share2 className="w-4 h-4" />}
                 </button>
               </div>
             </div>

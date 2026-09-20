@@ -4,7 +4,9 @@ import {
   auth, 
   ensureAnonymousAuth, 
   getUserProfile, 
-  createUserProfile, 
+  registerWithUsernameAndPassword,
+  loginWithUsernameAndPassword,
+  setAccountPassword,
   updateUserProfilePhoto 
 } from "../lib/firebase";
 import { UserProfile } from "../types";
@@ -14,7 +16,9 @@ interface AuthContextType {
   profile: UserProfile | null;
   loading: boolean;
   needsUsernameSetup: boolean;
-  saveUsername: (username: string) => Promise<void>;
+  saveUsername: (username: string, password?: string) => Promise<void>;
+  loginUser: (username: string, password: string) => Promise<void>;
+  setPassword: (password: string) => Promise<void>;
   updatePhoto: (photoUrl: string) => Promise<void>;
   refreshProfile: () => Promise<void>;
 }
@@ -70,11 +74,20 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
     };
   }, []);
 
-  const saveUsername = async (username: string) => {
-    if (!user) throw new Error("No active user session.");
-    const newProfile = await createUserProfile(user.uid, username);
+  const saveUsername = async (username: string, password?: string) => {
+    const newProfile = await registerWithUsernameAndPassword(username, password);
     setProfile(newProfile);
     setNeedsUsernameSetup(false);
+  };
+
+  const loginUser = async (username: string, password: string) => {
+    const loggedProfile = await loginWithUsernameAndPassword(username, password);
+    setProfile(loggedProfile);
+    setNeedsUsernameSetup(false);
+  };
+
+  const setPassword = async (password: string) => {
+    await setAccountPassword(password);
   };
 
   const updatePhoto = async (photoUrl: string) => {
@@ -97,6 +110,8 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
         loading,
         needsUsernameSetup,
         saveUsername,
+        loginUser,
+        setPassword,
         updatePhoto,
         refreshProfile
       }}

@@ -46,6 +46,7 @@ export function WatchRoom({ roomCode, initialOfflineFile, onLeaveRoom }: WatchRo
   const [activeTab, setActiveTab] = useState<"chat" | "participants">("chat");
   const [showParticipantsMobile, setShowParticipantsMobile] = useState(false);
   const [isChangeMediaOpen, setIsChangeMediaOpen] = useState(false);
+  const [isVoiceRecording, setIsVoiceRecording] = useState(false);
 
   // Throttled sync updates
   const lastSyncWriteTime = useRef<number>(0);
@@ -515,6 +516,7 @@ export function WatchRoom({ roomCode, initialOfflineFile, onLeaveRoom }: WatchRo
               onVideoEnded={handleVideoEnded}
               roomCode={roomCode}
               currentUserId={user?.uid}
+              isVoiceRecording={isVoiceRecording}
             />
           ) : (
             <div className="w-full aspect-video bg-neutral-900/90 border border-neutral-800 rounded-2xl flex flex-col items-center justify-center p-6 text-center">
@@ -599,6 +601,7 @@ export function WatchRoom({ roomCode, initialOfflineFile, onLeaveRoom }: WatchRo
                 roomCode={roomCode}
                 adminUid={room.adminUid}
                 isMovieCompleted={room.movieCompleted}
+                onRecordingStateChange={setIsVoiceRecording}
               />
             ) : (
               <div className="h-full bg-neutral-900/90 border border-neutral-800 rounded-2xl p-4 overflow-y-auto">

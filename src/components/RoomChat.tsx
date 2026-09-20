@@ -11,9 +11,15 @@ interface RoomChatProps {
   roomCode: string;
   adminUid: string;
   isMovieCompleted: boolean;
+  onRecordingStateChange?: (isRecording: boolean) => void;
 }
 
-export function RoomChat({ roomCode, adminUid, isMovieCompleted }: RoomChatProps) {
+export function RoomChat({ 
+  roomCode, 
+  adminUid, 
+  isMovieCompleted,
+  onRecordingStateChange 
+}: RoomChatProps) {
   const { user, profile } = useAuth();
   const [messages, setMessages] = useState<ChatMessage[]>([]);
   const [inputText, setInputText] = useState("");
@@ -198,6 +204,7 @@ export function RoomChat({ roomCode, adminUid, isMovieCompleted }: RoomChatProps
           <form onSubmit={handleSendMessage} className="flex items-center gap-2">
             <VoiceNoteRecorder
               onVoiceNoteUploaded={handleVoiceNoteUploaded}
+              onRecordingStateChange={onRecordingStateChange}
               disabled={isMovieCompleted}
             />
 

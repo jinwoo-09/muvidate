@@ -16,7 +16,7 @@ import {
   Headphones
 } from "lucide-react";
 import { rtdb } from "../lib/firebase";
-import { ref, onChildAdded, off } from "firebase/database";
+import { ref, onChildAdded, off, get } from "firebase/database";
 
 export interface VideoPlayerProps {
   src: string;
@@ -35,6 +35,7 @@ export interface VideoPlayerProps {
   onVideoEnded?: () => void;
   roomCode?: string;
   currentUserId?: string;
+  isVoiceRecording?: boolean;
 }
 
 function VideoPlayerComponent({
@@ -47,7 +48,8 @@ function VideoPlayerComponent({
   onAudioTrackChange,
   onVideoEnded,
   roomCode,
-  currentUserId
+  currentUserId,
+  isVoiceRecording = false
 }: VideoPlayerProps) {
   const containerRef = useRef<HTMLDivElement>(null);
   const videoRef = useRef<HTMLVideoElement>(null);
@@ -105,6 +107,11 @@ function VideoPlayerComponent({
 
   const controlsTimeoutRef = useRef<number | null>(null);
   const isSeekingRef = useRef(false);
+  const isApplyingRemoteSyncRef = useRef(false);
+  const isUserIntentionalActionRef = useRef(false);
+  const hasSystemInterruptionRef = useRef(false);
+  const preVoiceRecordingMutedRef = useRef<boolean | null>(null);
+
   const lastEmittedState = useRef<{ isPlaying: boolean; currentTime: number } | null>(null);
   const lastSyncProcessedRef = useRef<{
     lastUpdated: number;
@@ -117,6 +124,27 @@ function VideoPlayerComponent({
   onVideoEndedRef.current = onVideoEnded;
 
   const canControl = isHost || !controlsLocked;
+
+  // Handle voice note recording: mute video during recording without pausing; restore previous mute state afterwards
+  useEffect(() => {
+    const video = videoRef.current;
+    if (!video) return;
+
+    if (isVoiceRecording) {
+      if (preVoiceRecordingMutedRef.current === null) {
+        preVoiceRecordingMutedRef.current = video.muted;
+      }
+      video.muted = true;
+      setIsMuted(true);
+    } else {
+      if (preVoiceRecordingMutedRef.current !== null) {
+        const wasMutedBefore = preVoiceRecordingMutedRef.current;
+        preVoiceRecordingMutedRef.current = null;
+        video.muted = wasMutedBefore;
+        setIsMuted(wasMutedBefore);
+      }
+    }
+  }, [isVoiceRecording]);
 
   // Auto-hide controls after 2 seconds of inactivity
   const resetControlsTimeout = useCallback(() => {
@@ -216,13 +244,18 @@ function VideoPlayerComponent({
 
     // Match play/pause state
     if (syncState.isPlaying && video.paused) {
+      isApplyingRemoteSyncRef.current = true;
       video.play().catch(() => {
         // Autoplay policy fallback: muted play or wait for interaction
         console.warn("Autoplay blocked by browser until user gesture");
+      }).finally(() => {
+        isApplyingRemoteSyncRef.current = false;
       });
       hasMeaningfulSync = true;
     } else if (!syncState.isPlaying && !video.paused) {
+      isApplyingRemoteSyncRef.current = true;
       video.pause();
+      isApplyingRemoteSyncRef.current = false;
       hasMeaningfulSync = true;
     }
 
@@ -259,6 +292,14 @@ function VideoPlayerComponent({
     const onPause = () => {
       setIsPlaying(false);
       setShowControls(true);
+
+      // Detect external/system pauses (e.g. phone calls, OS audio interruption).
+      // Do not sync these unexpected system pauses to the room!
+      if (!isUserIntentionalActionRef.current && !isApplyingRemoteSyncRef.current) {
+        hasSystemInterruptionRef.current = true;
+        console.log("System interruption detected on video playback. Will not sync pause to room.");
+      }
+      isUserIntentionalActionRef.current = false;
     };
 
     const onTimeUpdate = () => {
@@ -585,15 +626,45 @@ function VideoPlayerComponent({
     }
   };
 
-  const togglePlayPause = () => {
+  const togglePlayPause = async () => {
     const video = videoRef.current;
     if (!video || !canControl) return;
 
     if (video.paused) {
+      // If resuming after a system interruption, fetch the latest timeline from RTDB before playing
+      if (hasSystemInterruptionRef.current) {
+        hasSystemInterruptionRef.current = false;
+        if (roomCode) {
+          try {
+            const playbackRef = ref(rtdb, `rooms/${roomCode}/playbackState`);
+            const snap = await get(playbackRef);
+            if (snap.exists()) {
+              const latest = snap.val();
+              if (latest) {
+                const now = Date.now();
+                const elapsed = latest.isPlaying && latest.lastUpdated
+                  ? Math.max(0, (now - latest.lastUpdated) / 1000)
+                  : 0;
+                const expectedTime = latest.isPlaying
+                  ? Math.max(0, latest.currentTime + elapsed)
+                  : latest.currentTime;
+                const bounded = Math.min(video.duration || expectedTime, expectedTime);
+                video.currentTime = bounded;
+                setCurrentTime(bounded);
+              }
+            }
+          } catch (err) {
+            console.error("Failed to recover timeline after interruption:", err);
+          }
+        }
+      }
+
+      isUserIntentionalActionRef.current = true;
       video.play().then(() => {
         emitPlaybackState(true, video.currentTime);
       }).catch(console.error);
     } else {
+      isUserIntentionalActionRef.current = true;
       video.pause();
       emitPlaybackState(false, video.currentTime);
     }
@@ -602,6 +673,7 @@ function VideoPlayerComponent({
   const seekRelative = (seconds: number) => {
     const video = videoRef.current;
     if (!video || !canControl) return;
+    isUserIntentionalActionRef.current = true;
     const target = Math.max(0, Math.min(video.duration || 0, video.currentTime + seconds));
     video.currentTime = target;
     setCurrentTime(target);
@@ -622,6 +694,7 @@ function VideoPlayerComponent({
   const handleSeekEnd = (e: React.MouseEvent<HTMLInputElement> | React.TouchEvent<HTMLInputElement>) => {
     if (!canControl) return;
     isSeekingRef.current = false;
+    isUserIntentionalActionRef.current = true;
     const video = videoRef.current;
     if (video) {
       video.currentTime = currentTime;

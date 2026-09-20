@@ -4,10 +4,15 @@ import { uploadFileToWorker } from "../lib/workerApi";
 
 interface VoiceNoteRecorderProps {
   onVoiceNoteUploaded: (audioUrl: string) => Promise<void>;
+  onRecordingStateChange?: (isRecording: boolean) => void;
   disabled?: boolean;
 }
 
-export function VoiceNoteRecorder({ onVoiceNoteUploaded, disabled }: VoiceNoteRecorderProps) {
+export function VoiceNoteRecorder({ 
+  onVoiceNoteUploaded, 
+  onRecordingStateChange,
+  disabled 
+}: VoiceNoteRecorderProps) {
   const [isRecording, setIsRecording] = useState(false);
   const [recordDuration, setRecordDuration] = useState(0);
   const [isUploading, setIsUploading] = useState(false);
@@ -22,8 +27,9 @@ export function VoiceNoteRecorder({ onVoiceNoteUploaded, disabled }: VoiceNoteRe
     return () => {
       cleanupStream();
       if (timerRef.current) clearInterval(timerRef.current);
+      onRecordingStateChange?.(false);
     };
-  }, []);
+  }, [onRecordingStateChange]);
 
   const cleanupStream = () => {
     if (streamRef.current) {
@@ -66,6 +72,7 @@ export function VoiceNoteRecorder({ onVoiceNoteUploaded, disabled }: VoiceNoteRe
 
       mediaRecorder.start(100); // 100ms time slice
       setIsRecording(true);
+      onRecordingStateChange?.(true);
       setRecordDuration(0);
 
       timerRef.current = window.setInterval(() => {
@@ -73,6 +80,7 @@ export function VoiceNoteRecorder({ onVoiceNoteUploaded, disabled }: VoiceNoteRe
       }, 1000);
     } catch (err: any) {
       console.error("Mic access error:", err);
+      onRecordingStateChange?.(false);
       if (err.name === "NotAllowedError" || err.name === "PermissionDeniedError") {
         setError("Microphone permission was denied. Please allow microphone access in your browser.");
       } else {
@@ -89,6 +97,7 @@ export function VoiceNoteRecorder({ onVoiceNoteUploaded, disabled }: VoiceNoteRe
     }
     cleanupStream();
     setIsRecording(false);
+    onRecordingStateChange?.(false);
     setRecordDuration(0);
     audioChunksRef.current = [];
   };
@@ -100,6 +109,7 @@ export function VoiceNoteRecorder({ onVoiceNoteUploaded, disabled }: VoiceNoteRe
 
     if (timerRef.current) clearInterval(timerRef.current);
     setIsRecording(false);
+    onRecordingStateChange?.(false);
     setIsUploading(true);
 
     try {

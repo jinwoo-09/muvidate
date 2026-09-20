@@ -3,7 +3,12 @@ import {
   getAuth, 
   signInAnonymously, 
   onAuthStateChanged, 
-  User 
+  User,
+  signInWithEmailAndPassword,
+  createUserWithEmailAndPassword,
+  linkWithCredential,
+  EmailAuthProvider,
+  updatePassword
 } from "firebase/auth";
 import { 
   getFirestore, 
@@ -11,6 +16,7 @@ import {
   getDoc, 
   setDoc, 
   updateDoc, 
+  deleteDoc,
   collection, 
   query, 
   where, 
@@ -88,27 +94,207 @@ export async function isUsernameTaken(username: string, excludeUid?: string): Pr
   return true;
 }
 
-export async function createUserProfile(uid: string, username: string): Promise<UserProfile> {
+// Helper to convert username to internal Firebase Auth email format
+export function usernameToAuthEmail(username: string): string {
+  const sanitized = username.trim().toLowerCase().replace(/[^a-z0-9_]/g, "");
+  return `${sanitized}@muvidate.auth`;
+}
+
+// Safely migrate user documents from temporary anonymous UID to authenticated account UID
+export async function migrateUserData(oldUid: string, targetUid: string): Promise<void> {
+  if (!oldUid || !targetUid || oldUid === targetUid) return;
+
+  try {
+    const oldDocRef = doc(firestore, "users", oldUid);
+    const targetDocRef = doc(firestore, "users", targetUid);
+
+    const oldSnap = await getDoc(oldDocRef);
+    if (!oldSnap.exists()) {
+      return;
+    }
+
+    const oldData = oldSnap.data() as UserProfile;
+    const targetSnap = await getDoc(targetDocRef);
+    const targetData = targetSnap.exists() ? (targetSnap.data() as UserProfile) : null;
+
+    // Merge photoURL or other non-empty fields without overriding newer valid target data
+    const mergedData: Partial<UserProfile> = {
+      updatedAt: new Date().toISOString()
+    };
+
+    if (oldData.photoURL && (!targetData || !targetData.photoURL)) {
+      mergedData.photoURL = oldData.photoURL;
+    }
+
+    if (targetData) {
+      await updateDoc(targetDocRef, mergedData);
+    } else {
+      await setDoc(targetDocRef, {
+        ...oldData,
+        uid: targetUid,
+        ...mergedData
+      });
+    }
+
+    // Verify target document exists and has valid username before deleting old temporary document
+    const verifySnap = await getDoc(targetDocRef);
+    if (verifySnap.exists() && verifySnap.data()?.username) {
+      await deleteDoc(oldDocRef);
+    }
+  } catch (err) {
+    // Non-fatal; old data is preserved safely to prevent data loss
+    console.error("User data migration error (old data preserved):", err);
+  }
+}
+
+export async function registerWithUsernameAndPassword(
+  username: string, 
+  password?: string
+): Promise<UserProfile> {
   const trimmed = username.trim();
   const normalized = trimmed.toLowerCase();
 
-  const taken = await isUsernameTaken(trimmed, uid);
+  const taken = await isUsernameTaken(trimmed, auth.currentUser?.uid);
   if (taken) {
     throw new Error(`Username "${trimmed}" is already taken. Please choose another.`);
   }
 
+  let finalUid = auth.currentUser?.uid;
+
+  if (password && password.length > 0) {
+    if (password.length < 6) {
+      throw new Error("Password must be at least 6 characters long.");
+    }
+    const email = usernameToAuthEmail(trimmed);
+
+    if (auth.currentUser && auth.currentUser.isAnonymous) {
+      try {
+        const cred = await linkWithCredential(
+          auth.currentUser, 
+          EmailAuthProvider.credential(email, password)
+        );
+        finalUid = cred.user.uid;
+      } catch (linkErr: any) {
+        if (linkErr.code === "auth/credential-already-in-use" || linkErr.code === "auth/email-already-in-use") {
+          throw new Error(`An account with username "${trimmed}" already exists.`);
+        }
+        // Fallback: create fresh credential
+        const cred = await createUserWithEmailAndPassword(auth, email, password);
+        finalUid = cred.user.uid;
+      }
+    } else if (!auth.currentUser) {
+      const cred = await createUserWithEmailAndPassword(auth, email, password);
+      finalUid = cred.user.uid;
+    }
+  }
+
+  if (!finalUid) {
+    const anon = await ensureAnonymousAuth();
+    finalUid = anon.uid;
+  }
+
   const profileData: UserProfile = {
-    uid,
+    uid: finalUid,
     username: trimmed,
     usernameLowercase: normalized,
-    photoURL: "",
+    photoURL: auth.currentUser?.photoURL || "",
     createdAt: new Date().toISOString(),
     updatedAt: new Date().toISOString()
   };
 
-  const docRef = doc(firestore, "users", uid);
-  await setDoc(docRef, profileData);
+  const docRef = doc(firestore, "users", finalUid);
+  await setDoc(docRef, profileData, { merge: true });
   return profileData;
+}
+
+export async function loginWithUsernameAndPassword(
+  username: string, 
+  password: string
+): Promise<UserProfile> {
+  const previousUid = auth.currentUser?.uid;
+  const trimmed = username.trim();
+  const email = usernameToAuthEmail(trimmed);
+
+  try {
+    const cred = await signInWithEmailAndPassword(auth, email, password);
+    const targetUid = cred.user.uid;
+
+    // Migrate any data from previous temporary anonymous session if different
+    if (previousUid && previousUid !== targetUid) {
+      await migrateUserData(previousUid, targetUid);
+    }
+
+    let profile = await getUserProfile(targetUid);
+    if (!profile) {
+      // Look up by username in firestore if legacy account existed under different ID
+      const normalized = trimmed.toLowerCase();
+      const q = query(
+        collection(firestore, "users"),
+        where("usernameLowercase", "==", normalized)
+      );
+      const snap = await getDocs(q);
+      if (!snap.empty) {
+        const existingDoc = snap.docs[0];
+        const existingData = existingDoc.data() as UserProfile;
+        profile = {
+          ...existingData,
+          uid: targetUid,
+          updatedAt: new Date().toISOString()
+        };
+        await setDoc(doc(firestore, "users", targetUid), profile);
+        if (existingDoc.id !== targetUid) {
+          await deleteDoc(existingDoc.ref);
+        }
+      } else {
+        profile = {
+          uid: targetUid,
+          username: trimmed,
+          usernameLowercase: normalized,
+          photoURL: auth.currentUser?.photoURL || "",
+          createdAt: new Date().toISOString(),
+          updatedAt: new Date().toISOString()
+        };
+        await setDoc(doc(firestore, "users", targetUid), profile);
+      }
+    }
+
+    if (!profile) {
+      profile = {
+        uid: targetUid,
+        username: trimmed,
+        usernameLowercase: trimmed.toLowerCase(),
+        photoURL: auth.currentUser?.photoURL || "",
+        createdAt: new Date().toISOString(),
+        updatedAt: new Date().toISOString()
+      };
+      await setDoc(doc(firestore, "users", targetUid), profile);
+    }
+
+    return profile;
+  } catch (err: any) {
+    if (err.code === "auth/invalid-credential" || err.code === "auth/user-not-found" || err.code === "auth/wrong-password") {
+      throw new Error("Invalid username or password. Please verify and try again.");
+    }
+    throw new Error(err.message || "Failed to log in. Please try again.");
+  }
+}
+
+export async function setAccountPassword(password: string): Promise<void> {
+  const current = auth.currentUser;
+  if (!current) throw new Error("No active user session.");
+  if (password.length < 6) throw new Error("Password must be at least 6 characters.");
+
+  const profile = await getUserProfile(current.uid);
+  if (!profile || !profile.username) {
+    throw new Error("Cannot set password: User profile does not exist yet.");
+  }
+
+  const email = usernameToAuthEmail(profile.username);
+  if (current.isAnonymous) {
+    await linkWithCredential(current, EmailAuthProvider.credential(email, password));
+  } else {
+    await updatePassword(current, password);
+  }
 }
 
 export async function updateUserProfilePhoto(uid: string, photoURL: string): Promise<void> {

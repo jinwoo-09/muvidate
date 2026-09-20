@@ -1,7 +1,7 @@
 import React, { useState, useRef } from "react";
 import { useAuth } from "../context/AuthContext";
 import { uploadFileToWorker } from "../lib/workerApi";
-import { X, Camera, Loader2, AlertCircle, CheckCircle, Copy, User, Instagram } from "lucide-react";
+import { X, Camera, Loader2, AlertCircle, CheckCircle, Copy, User, Instagram, KeyRound, Eye, EyeOff } from "lucide-react";
 
 interface ProfileModalProps {
   isOpen: boolean;
@@ -9,12 +9,19 @@ interface ProfileModalProps {
 }
 
 export function ProfileModal({ isOpen, onClose }: ProfileModalProps) {
-  const { profile, user, updatePhoto } = useAuth();
+  const { profile, user, updatePhoto, setPassword } = useAuth();
   const [uploading, setUploading] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [success, setSuccess] = useState<string | null>(null);
   const [copied, setCopied] = useState(false);
   const fileInputRef = useRef<HTMLInputElement>(null);
+
+  // Password setting state
+  const [isChangingPassword, setIsChangingPassword] = useState(false);
+  const [newPassword, setNewPassword] = useState("");
+  const [confirmPassword, setConfirmPassword] = useState("");
+  const [showPassword, setShowPassword] = useState(false);
+  const [savingPassword, setSavingPassword] = useState(false);
 
   if (!isOpen || !profile) return null;
 
@@ -50,6 +57,32 @@ export function ProfileModal({ isOpen, onClose }: ProfileModalProps) {
     }
   };
 
+  const handleSavePassword = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (newPassword.length < 6) {
+      setError("Password must be at least 6 characters long.");
+      return;
+    }
+    if (newPassword !== confirmPassword) {
+      setError("Passwords do not match.");
+      return;
+    }
+
+    setError(null);
+    setSavingPassword(true);
+    try {
+      await setPassword(newPassword);
+      setSuccess("Password saved successfully! You can now log into this account from any device.");
+      setIsChangingPassword(false);
+      setNewPassword("");
+      setConfirmPassword("");
+    } catch (err: any) {
+      setError(err.message || "Failed to save password.");
+    } finally {
+      setSavingPassword(false);
+    }
+  };
+
   const copyUid = () => {
     if (user?.uid) {
       navigator.clipboard.writeText(user.uid);
@@ -61,8 +94,8 @@ export function ProfileModal({ isOpen, onClose }: ProfileModalProps) {
   const initials = profile.username ? profile.username.slice(0, 2).toUpperCase() : "MD";
 
   return (
-    <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/80 backdrop-blur-sm animate-in fade-in duration-200">
-      <div className="w-full max-w-md bg-neutral-900 border border-neutral-800 rounded-2xl p-6 shadow-2xl relative">
+    <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/80 backdrop-blur-sm animate-in fade-in duration-200 overflow-y-auto">
+      <div className="w-full max-w-md bg-neutral-900 border border-neutral-800 rounded-3xl p-6 shadow-2xl relative my-auto">
         <button
           onClick={onClose}
           className="absolute top-4 right-4 p-2 text-neutral-400 hover:text-white rounded-lg hover:bg-neutral-800 transition"
@@ -111,8 +144,8 @@ export function ProfileModal({ isOpen, onClose }: ProfileModalProps) {
 
           <p className="text-xs text-neutral-400">Click the camera icon to upload a new avatar</p>
           <h4 className="text-xl font-bold text-white mt-3">@{profile.username}</h4>
-          <span className="inline-block mt-1 px-2.5 py-0.5 rounded-full text-[11px] font-medium bg-emerald-500/15 text-emerald-400 border border-emerald-500/30">
-            Anonymous Account Active
+          <span className="inline-block mt-1 px-2.5 py-0.5 rounded-full text-[11px] font-medium bg-rose-500/15 text-rose-400 border border-rose-500/30">
+            Account Active
           </span>
         </div>
 
@@ -130,10 +163,76 @@ export function ProfileModal({ isOpen, onClose }: ProfileModalProps) {
           </div>
         )}
 
-        <div className="bg-neutral-950/80 rounded-xl p-4 border border-neutral-800/80 space-y-3">
-          <div>
+        <div className="space-y-3 mb-4">
+          {/* Password Setup / Change Section */}
+          <div className="bg-neutral-950/80 rounded-xl p-4 border border-neutral-800/80">
+            {!isChangingPassword ? (
+              <div className="flex items-center justify-between">
+                <div className="flex items-center gap-2 text-xs text-neutral-300">
+                  <KeyRound className="w-4 h-4 text-rose-400" />
+                  <span>Account Password</span>
+                </div>
+                <button
+                  type="button"
+                  onClick={() => setIsChangingPassword(true)}
+                  className="px-3 py-1 bg-neutral-800 hover:bg-neutral-700 text-xs text-white rounded-lg transition"
+                >
+                  Set / Change Password
+                </button>
+              </div>
+            ) : (
+              <form onSubmit={handleSavePassword} className="space-y-3">
+                <div className="flex items-center justify-between">
+                  <span className="text-xs font-semibold text-white">Set Account Password</span>
+                  <button
+                    type="button"
+                    onClick={() => setIsChangingPassword(false)}
+                    className="text-xs text-neutral-400 hover:text-white"
+                  >
+                    Cancel
+                  </button>
+                </div>
+
+                <div className="relative">
+                  <input
+                    type={showPassword ? "text" : "password"}
+                    value={newPassword}
+                    onChange={(e) => setNewPassword(e.target.value)}
+                    placeholder="New password (min 6 chars)"
+                    className="w-full pl-3 pr-9 py-2 bg-neutral-900 border border-neutral-700 rounded-lg text-xs text-white placeholder-neutral-500 focus:outline-none focus:border-rose-500"
+                  />
+                  <button
+                    type="button"
+                    onClick={() => setShowPassword(!showPassword)}
+                    className="absolute right-2.5 top-1/2 -translate-y-1/2 text-neutral-400 hover:text-white"
+                  >
+                    {showPassword ? <EyeOff className="w-3.5 h-3.5" /> : <Eye className="w-3.5 h-3.5" />}
+                  </button>
+                </div>
+
+                <input
+                  type={showPassword ? "text" : "password"}
+                  value={confirmPassword}
+                  onChange={(e) => setConfirmPassword(e.target.value)}
+                  placeholder="Confirm new password"
+                  className="w-full px-3 py-2 bg-neutral-900 border border-neutral-700 rounded-lg text-xs text-white placeholder-neutral-500 focus:outline-none focus:border-rose-500"
+                />
+
+                <button
+                  type="submit"
+                  disabled={savingPassword || newPassword.length < 6}
+                  className="w-full py-2 bg-rose-600 hover:bg-rose-500 text-white text-xs font-semibold rounded-lg transition disabled:opacity-50 flex items-center justify-center gap-1.5"
+                >
+                  {savingPassword ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : null}
+                  <span>Save Password</span>
+                </button>
+              </form>
+            )}
+          </div>
+
+          <div className="bg-neutral-950/80 rounded-xl p-4 border border-neutral-800/80">
             <span className="text-[11px] uppercase tracking-wider text-neutral-400 font-semibold block mb-1">
-              Your Firebase UID
+              Your Account UID
             </span>
             <div className="flex items-center justify-between gap-2">
               <code className="text-xs text-neutral-300 font-mono truncate">{user?.uid}</code>
@@ -146,37 +245,37 @@ export function ProfileModal({ isOpen, onClose }: ProfileModalProps) {
               </button>
             </div>
           </div>
-        </div>
 
-        {/* Developer Attribution */}
-        <div className="bg-neutral-950/80 rounded-xl p-4 border border-neutral-800/80 space-y-2">
-          <span className="text-[11px] uppercase tracking-wider text-neutral-400 font-semibold block">
-            Developer Info
-          </span>
-          <div className="flex items-center justify-between gap-3">
-            <div className="flex items-center gap-2.5">
-              <div className="w-8 h-8 rounded-lg bg-rose-500/10 border border-rose-500/25 flex items-center justify-center text-rose-400">
-                <Instagram className="w-4 h-4" />
+          {/* Developer Attribution */}
+          <div className="bg-neutral-950/80 rounded-xl p-4 border border-neutral-800/80">
+            <span className="text-[11px] uppercase tracking-wider text-neutral-400 font-semibold block mb-2">
+              Developer Info
+            </span>
+            <div className="flex items-center justify-between gap-3">
+              <div className="flex items-center gap-2.5">
+                <div className="w-8 h-8 rounded-lg bg-rose-500/10 border border-rose-500/25 flex items-center justify-center text-rose-400">
+                  <Instagram className="w-4 h-4" />
+                </div>
+                <div>
+                  <p className="text-xs font-semibold text-white">Developer: Ashuuxoo</p>
+                  <p className="text-[11px] text-neutral-400">Creator of MuviDate</p>
+                </div>
               </div>
-              <div>
-                <p className="text-xs font-semibold text-white">Developer: Ashuuxoo</p>
-                <p className="text-[11px] text-neutral-400">Creator of MuviDate</p>
-              </div>
+              <a
+                href="https://www.instagram.com/ashuuxoo"
+                target="_blank"
+                rel="noopener noreferrer"
+                className="inline-flex items-center gap-1.5 px-3 py-1.5 bg-gradient-to-r from-rose-600 to-pink-600 hover:from-rose-500 hover:to-pink-500 text-white rounded-lg text-xs font-medium transition shadow-sm shrink-0"
+                title="Visit Instagram: @ashuuxoo"
+              >
+                <Instagram className="w-3.5 h-3.5" />
+                <span>@ashuuxoo</span>
+              </a>
             </div>
-            <a
-              href="https://www.instagram.com/ashuuxoo"
-              target="_blank"
-              rel="noopener noreferrer"
-              className="inline-flex items-center gap-1.5 px-3 py-1.5 bg-gradient-to-r from-rose-600 to-pink-600 hover:from-rose-500 hover:to-pink-500 text-white rounded-lg text-xs font-medium transition shadow-sm shrink-0"
-              title="Visit Instagram: @ashuuxoo"
-            >
-              <Instagram className="w-3.5 h-3.5" />
-              <span>@ashuuxoo</span>
-            </a>
           </div>
         </div>
 
-        <div className="mt-6 flex justify-end">
+        <div className="mt-4 flex justify-end">
           <button
             onClick={onClose}
             className="px-5 py-2.5 bg-neutral-800 hover:bg-neutral-700 text-white text-sm font-medium rounded-xl transition"
