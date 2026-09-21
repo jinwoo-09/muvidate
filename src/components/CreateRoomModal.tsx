@@ -133,7 +133,7 @@ export function CreateRoomModal({
         }
         movieId = found.id;
         movieTitle = found.Title;
-        moviePoster = found.poster || "";
+        moviePoster = (found.cover && found.cover.trim() !== "") ? found.cover : (found.poster || "");
         movieUrl = found.url;
       } else if (sourceType === "direct") {
         if (!directUrl.trim()) {

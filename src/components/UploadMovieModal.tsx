@@ -63,6 +63,7 @@ export function UploadMovieModal({ isOpen, onClose, onMovieAdded }: UploadMovieM
   const [description, setDescription] = useState("");
   const [posterMode, setPosterMode] = useState<"upload" | "url">("upload");
   const [posterUrl, setPosterUrl] = useState("");
+  const [coverUrl, setCoverUrl] = useState("");
   const [posterFile, setPosterFile] = useState<File | null>(null);
   const [movieSourceMode, setMovieSourceMode] = useState<"file" | "url">("file");
   const [movieFile, setMovieFile] = useState<File | null>(null);
@@ -309,6 +310,7 @@ export function UploadMovieModal({ isOpen, onClose, onMovieAdded }: UploadMovieM
         year: yearNum,
         description: description.trim(),
         poster: finalPosterUrl,
+        cover: coverUrl.trim() || undefined,
         url: finalMovieUrl
       });
 
@@ -717,6 +719,21 @@ export function UploadMovieModal({ isOpen, onClose, onMovieAdded }: UploadMovieM
                 />
               )}
             </div>
+          </div>
+
+          {/* Cover URL (Optional) */}
+          <div>
+            <label className="block text-xs font-semibold uppercase tracking-wider text-neutral-300 mb-1.5">
+              Cover URL (Optional)
+            </label>
+            <input
+              type="url"
+              value={coverUrl}
+              onChange={(e) => setCoverUrl(e.target.value)}
+              placeholder="https://example.com/landscape-cover.jpg"
+              disabled={isUploading}
+              className="w-full px-3.5 py-2.5 bg-neutral-950 border border-neutral-700 rounded-xl text-white placeholder-neutral-500 focus:outline-none focus:ring-2 focus:ring-rose-500 text-sm"
+            />
           </div>
 
           {/* Description */}

@@ -16,6 +16,7 @@ export interface Movie {
   year: number;
   description: string;
   poster: string;
+  cover?: string;
   url: string;
   createdAt?: any;
 }

@@ -30,6 +30,8 @@ export function MovieDetailModal({
     ? movie.genre.split(",").map((g) => g.trim())
     : [];
 
+  const detailCoverUrl = (movie.cover && movie.cover.trim() !== "") ? movie.cover : movie.poster;
+
   return (
     <div className="fixed inset-0 z-[20000] flex items-center justify-center p-3 sm:p-6 bg-black/90 backdrop-blur-md overflow-y-auto">
       <div className="w-full max-w-3xl bg-neutral-900 border border-neutral-800 rounded-3xl overflow-hidden shadow-2xl relative my-auto">
@@ -58,7 +60,7 @@ export function MovieDetailModal({
 
             <VideoPlayer
               src={movie.url}
-              poster={movie.poster}
+              poster={detailCoverUrl}
               isHost={true}
               controlsLocked={false}
             />
@@ -67,9 +69,9 @@ export function MovieDetailModal({
           <div>
             {/* Header Backdrop / Banner */}
             <div className="relative h-64 sm:h-80 w-full overflow-hidden bg-neutral-950">
-              {movie.poster ? (
+              {detailCoverUrl ? (
                 <img
-                  src={movie.poster}
+                  src={detailCoverUrl}
                   alt={movie.Title}
                   className="w-full h-full object-cover object-center filter brightness-50"
                   referrerPolicy="no-referrer"

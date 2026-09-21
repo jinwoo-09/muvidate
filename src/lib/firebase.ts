@@ -397,6 +397,7 @@ export function subscribeToMovies(callback: (movies: Movie[]) => void, onError?:
         year: Number(data.year) || new Date().getFullYear(),
         description: data.description || "",
         poster: data.poster || "",
+        cover: data.cover || undefined,
         url: data.url || "",
         createdAt: data.createdAt
       });
@@ -414,10 +415,11 @@ export async function addMovieToFirestore(movieData: {
   year: number;
   description: string;
   poster: string;
+  cover?: string;
   url: string;
 }): Promise<string> {
   const collRef = collection(firestore, "movie");
-  const docRef = await addDoc(collRef, {
+  const payload: any = {
     Title: movieData.Title.trim(),
     genre: movieData.genre.trim(),
     year: Number(movieData.year),
@@ -425,6 +427,10 @@ export async function addMovieToFirestore(movieData: {
     poster: movieData.poster.trim(),
     url: movieData.url.trim(),
     createdAt: serverTimestamp()
-  });
+  };
+  if (movieData.cover && movieData.cover.trim() !== "") {
+    payload.cover = movieData.cover.trim();
+  }
+  const docRef = await addDoc(collRef, payload);
   return docRef.id;
 }

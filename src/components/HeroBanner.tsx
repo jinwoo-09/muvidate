@@ -21,14 +21,16 @@ export function HeroBanner({
     ? movie.genre.split(",").map((g) => g.trim())
     : ["Featured"];
 
+  const bannerUrl = movie.cover && movie.cover.trim() !== "" ? movie.cover : movie.poster;
+
   return (
     <div className="relative w-full rounded-3xl overflow-hidden bg-neutral-900 border border-neutral-800 shadow-2xl min-h-[380px] sm:min-h-[440px] flex items-end">
       {/* Background Poster with heavy cinematic gradient overlays */}
       <div className="absolute inset-0 z-0 overflow-hidden">
-        {movie.poster ? (
+        {bannerUrl ? (
           <img
-            key={movie.poster}
-            src={movie.poster}
+            key={bannerUrl}
+            src={bannerUrl}
             alt={movie.Title}
             className="w-full h-full object-cover object-center filter brightness-60 scale-100 transition-all duration-1000 animate-in fade-in zoom-in-95"
             referrerPolicy="no-referrer"
