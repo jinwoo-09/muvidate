@@ -3,6 +3,7 @@ import { useAuth } from "../context/AuthContext";
 import { rtdb, subscribeToMovies } from "../lib/firebase";
 import { ref, update } from "firebase/database";
 import { Movie } from "../types";
+import { getVideoDuration } from "../lib/videoUtils";
 import { 
   X, 
   Film, 
@@ -130,6 +131,7 @@ export function ChangeMediaModal({
       let movieId = "";
       let movieSource: "firestore" | "direct" | "offline" = activeSourceTab === "search" ? "firestore" : activeSourceTab;
       let offlineFileName = "";
+      let offlineDuration: number | undefined = undefined;
 
       if (activeSourceTab === "search") {
         const found = movies.find((m) => m.id === selectedMovieId);
@@ -146,7 +148,7 @@ export function ChangeMediaModal({
       } else if (activeSourceTab === "direct") {
         const trimmedUrl = directUrl.trim();
         if (!trimmedUrl) {
-          setError("Please enter a direct MP4 video URL.");
+          setError("Please enter a direct video URL.");
           setIsUpdating(false);
           return;
         }
@@ -157,7 +159,7 @@ export function ChangeMediaModal({
             throw new Error("Invalid protocol");
           }
         } catch {
-          setError("Please enter a valid HTTP or HTTPS video URL (e.g. https://example.com/movie.mp4).");
+          setError("Please enter a valid HTTP or HTTPS video URL.");
           setIsUpdating(false);
           return;
         }
@@ -167,14 +169,15 @@ export function ChangeMediaModal({
         movieSource = "direct";
       } else if (activeSourceTab === "offline") {
         if (!offlineFile) {
-          setError("Please choose a local MP4 video file from your device.");
+          setError("Please choose a local video file from your device.");
           setIsUpdating(false);
           return;
         }
 
-        // Validate MP4 and 1GB file size
-        if (!offlineFile.name.toLowerCase().endsWith(".mp4") || offlineFile.size > MAX_MOVIE_SIZE) {
-          setError("Offline video file must be an .mp4 file and no larger than 1 GB.");
+        try {
+          offlineDuration = await getVideoDuration(offlineFile);
+        } catch (durErr: any) {
+          setError(durErr.message || "This device/browser cannot play or decode this video format.");
           setIsUpdating(false);
           return;
         }
@@ -196,6 +199,7 @@ export function ChangeMediaModal({
         moviePoster,
         movieUrl,
         offlineFileName,
+        offlineDuration,
         movieCompleted: false,
         playbackState: {
           isPlaying: false,
@@ -455,19 +459,14 @@ export function ChangeMediaModal({
 
               <div>
                 <label className="block text-[11px] font-semibold uppercase tracking-wider text-neutral-400 mb-1.5">
-                  Select Local MP4 File * (Max 1 GB)
+                  Select Local Video File *
                 </label>
                 <input
                   type="file"
-                  accept=".mp4,video/mp4"
+                  accept="video/*"
                   onChange={(e) => {
                     const file = e.target.files?.[0];
                     if (!file) return;
-                    if (!file.name.toLowerCase().endsWith(".mp4") || file.size > MAX_MOVIE_SIZE) {
-                      setError("File must be an .mp4 video and no larger than 1 GB.");
-                      setOfflineFile(null);
-                      return;
-                    }
                     setError(null);
                     setOfflineFile(file);
                   }}
@@ -480,7 +479,7 @@ export function ChangeMediaModal({
                   <div className="truncate">
                     <p className="text-xs font-semibold text-white truncate">{offlineFile.name}</p>
                     <p className="text-[10px] text-neutral-400">
-                      {(offlineFile.size / (1024 * 1024)).toFixed(1)} MB • MP4
+                      {(offlineFile.size / (1024 * 1024)).toFixed(1)} MB
                     </p>
                   </div>
                   <span className="text-[10px] px-2 py-0.5 bg-emerald-500/20 text-emerald-300 rounded-md font-medium">

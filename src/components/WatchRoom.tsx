@@ -3,6 +3,7 @@ import { useAuth } from "../context/AuthContext";
 import { rtdb } from "../lib/firebase";
 import { ref, onValue, off, update, set } from "firebase/database";
 import { Room, RoomParticipant } from "../types";
+import { getVideoDuration, formatVideoTime } from "../lib/videoUtils";
 import { VideoPlayer } from "./VideoPlayer";
 import { RoomChat } from "./RoomChat";
 import { ChangeMediaModal } from "./ChangeMediaModal";
@@ -21,7 +22,8 @@ import {
   CheckCircle2, 
   Clock, 
   ArrowLeft,
-  RefreshCw 
+  RefreshCw,
+  Loader2 
 } from "lucide-react";
 
 interface WatchRoomProps {
@@ -40,6 +42,21 @@ export function WatchRoom({ roomCode, initialOfflineFile, onLeaveRoom }: WatchRo
   // Local video state for offline video file
   const [localVideoUrl, setLocalVideoUrl] = useState<string>("");
   const [localFileName, setLocalFileName] = useState<string>("");
+  const [offlineDurationError, setOfflineDurationError] = useState<string | null>(null);
+  const [isExtractingDuration, setIsExtractingDuration] = useState(false);
+
+  const activeObjectUrlRef = useRef<string>("");
+  useEffect(() => {
+    activeObjectUrlRef.current = localVideoUrl;
+  }, [localVideoUrl]);
+
+  useEffect(() => {
+    return () => {
+      if (activeObjectUrlRef.current && activeObjectUrlRef.current.startsWith("blob:")) {
+        URL.revokeObjectURL(activeObjectUrlRef.current);
+      }
+    };
+  }, []);
 
   const [copied, setCopied] = useState(false);
   const [shared, setShared] = useState(false);
@@ -58,22 +75,58 @@ export function WatchRoom({ roomCode, initialOfflineFile, onLeaveRoom }: WatchRo
   }, [room?.movieSource, room?.movieUrl, localVideoUrl]);
 
   const handleOfflineFileSelected = useCallback((file: File) => {
+    if (activeObjectUrlRef.current && activeObjectUrlRef.current.startsWith("blob:")) {
+      URL.revokeObjectURL(activeObjectUrlRef.current);
+    }
     const url = URL.createObjectURL(file);
     setLocalVideoUrl(url);
     setLocalFileName(file.name);
+    setOfflineDurationError(null);
   }, []);
 
   // Handle initial offline file if host passed it during creation
   useEffect(() => {
     if (initialOfflineFile) {
+      if (activeObjectUrlRef.current && activeObjectUrlRef.current.startsWith("blob:")) {
+        URL.revokeObjectURL(activeObjectUrlRef.current);
+      }
       const url = URL.createObjectURL(initialOfflineFile);
       setLocalVideoUrl(url);
       setLocalFileName(initialOfflineFile.name);
-      return () => {
-        URL.revokeObjectURL(url);
-      };
     }
   }, [initialOfflineFile]);
+
+  const isHost = user?.uid === room?.adminUid;
+  const lastProcessedMediaKeyRef = useRef<string>("");
+
+  useEffect(() => {
+    if (!room) return;
+
+    if (room.movieSource !== "offline") {
+      if (localVideoUrl) {
+        if (activeObjectUrlRef.current && activeObjectUrlRef.current.startsWith("blob:")) {
+          URL.revokeObjectURL(activeObjectUrlRef.current);
+        }
+        setLocalVideoUrl("");
+        setLocalFileName("");
+        setOfflineDurationError(null);
+      }
+      lastProcessedMediaKeyRef.current = `${room.movieSource}:${room.movieUrl}`;
+    } else {
+      const currentKey = `offline:${room.offlineFileName}:${room.offlineDuration}`;
+      if (lastProcessedMediaKeyRef.current && lastProcessedMediaKeyRef.current !== currentKey) {
+        if (localVideoUrl && !isHost) {
+          if (activeObjectUrlRef.current && activeObjectUrlRef.current.startsWith("blob:")) {
+            URL.revokeObjectURL(activeObjectUrlRef.current);
+          }
+          setLocalVideoUrl("");
+          setLocalFileName("");
+          setOfflineDurationError(null);
+        }
+      }
+      lastProcessedMediaKeyRef.current = currentKey;
+    }
+  }, [room?.movieSource, room?.offlineFileName, room?.offlineDuration, room?.movieUrl, isHost, localVideoUrl]);
 
   // Subscribe to RTDB room changes
   useEffect(() => {
@@ -164,9 +217,7 @@ export function WatchRoom({ roomCode, initialOfflineFile, onLeaveRoom }: WatchRo
     };
   }, [roomCode, user, profile]);
 
-  const isHost = user?.uid === room?.adminUid;
-
-  // Sync state emitter from VideoPlayer
+// Sync state emitter from VideoPlayer
   const handlePlaybackChange = useCallback((state: { isPlaying: boolean; currentTime: number }) => {
     if (!room || !user || !profile) return;
     if (room.controlsLocked && !isHost) return;
@@ -268,17 +319,48 @@ export function WatchRoom({ roomCode, initialOfflineFile, onLeaveRoom }: WatchRo
   };
 
   // Handle participant selecting their offline file
-  const handleOfflineFileSelect = (e: React.ChangeEvent<HTMLInputElement>) => {
+  const handleOfflineFileSelect = async (e: React.ChangeEvent<HTMLInputElement>) => {
     const file = e.target.files?.[0];
     if (!file) return;
 
-    const url = URL.createObjectURL(file);
-    setLocalVideoUrl(url);
-    setLocalFileName(file.name);
+    setOfflineDurationError(null);
+    setIsExtractingDuration(true);
 
-    if (user) {
-      const participantRef = ref(rtdb, `rooms/${roomCode}/participants/${user.uid}`);
-      update(participantRef, { hasOfflineFile: true });
+    try {
+      const localDuration = await getVideoDuration(file);
+
+      // Verify duration against room's expected offlineDuration
+      if (room && room.offlineDuration && room.offlineDuration > 0) {
+        const durationDiff = Math.abs(localDuration - room.offlineDuration);
+        if (durationDiff > 1.5) { // 1.5s tolerance
+          setOfflineDurationError(
+            `This video duration does not match the room video. Please select the same video. (Expected ~${formatVideoTime(room.offlineDuration)}, selected file is ${formatVideoTime(localDuration)})`
+          );
+          setIsExtractingDuration(false);
+          e.target.value = "";
+          return;
+        }
+      }
+
+      if (activeObjectUrlRef.current && activeObjectUrlRef.current.startsWith("blob:")) {
+        URL.revokeObjectURL(activeObjectUrlRef.current);
+      }
+
+      const url = URL.createObjectURL(file);
+      setLocalVideoUrl(url);
+      setLocalFileName(file.name);
+
+      if (user) {
+        const participantRef = ref(rtdb, `rooms/${roomCode}/participants/${user.uid}`);
+        update(participantRef, { hasOfflineFile: true }).catch(() => {});
+      }
+    } catch (err: any) {
+      setOfflineDurationError(
+        err.message || "This device/browser cannot play or decode this video format."
+      );
+    } finally {
+      setIsExtractingDuration(false);
+      e.target.value = "";
     }
   };
 
@@ -428,7 +510,7 @@ export function WatchRoom({ roomCode, initialOfflineFile, onLeaveRoom }: WatchRo
 
       {/* Offline Video Prompt for Participants */}
       {isOfflineSource && !localVideoUrl && (
-        <div className="p-4 sm:p-5 bg-amber-500/10 border border-amber-500/30 rounded-2xl animate-in fade-in">
+        <div className="p-4 sm:p-5 bg-amber-500/10 border border-amber-500/30 rounded-2xl animate-in fade-in space-y-3">
           <div className="flex flex-col sm:flex-row items-start sm:items-center justify-between gap-4">
             <div className="flex items-start gap-3">
               <div className="p-2.5 bg-amber-500/20 text-amber-400 rounded-xl shrink-0 mt-0.5">
@@ -439,23 +521,43 @@ export function WatchRoom({ roomCode, initialOfflineFile, onLeaveRoom }: WatchRo
                   This room is using an offline video file
                 </h4>
                 <p className="text-xs text-neutral-300 mt-1 leading-relaxed">
-                  Expected file: <strong className="text-amber-300">"{room.offlineFileName || room.movieTitle}"</strong>.
-                  Select the same video file from your device to watch together with synchronized playback.
+                  Expected file: <strong className="text-amber-300">"{room.offlineFileName || room.movieTitle}"</strong>
+                  {room.offlineDuration ? (
+                    <span> (Duration: <strong className="text-amber-300">{formatVideoTime(room.offlineDuration)}</strong>)</span>
+                  ) : null}.
+                  Select your local copy of this video from your device to watch together with synchronized playback.
                 </p>
               </div>
             </div>
 
-            <label className="px-4 py-2.5 bg-amber-600 hover:bg-amber-500 text-white text-xs font-semibold rounded-xl shadow-lg cursor-pointer transition shrink-0 flex items-center gap-2">
-              <HardDrive className="w-4 h-4" />
-              <span>Select File on Your Device</span>
+            <label className={`px-4 py-2.5 ${isExtractingDuration ? "bg-amber-800 cursor-wait" : "bg-amber-600 hover:bg-amber-500 cursor-pointer"} text-white text-xs font-semibold rounded-xl shadow-lg transition shrink-0 flex items-center gap-2`}>
+              {isExtractingDuration ? (
+                <>
+                  <Loader2 className="w-4 h-4 animate-spin" />
+                  <span>Checking file...</span>
+                </>
+              ) : (
+                <>
+                  <HardDrive className="w-4 h-4" />
+                  <span>Select File on Your Device</span>
+                </>
+              )}
               <input
                 type="file"
                 accept="video/*"
+                disabled={isExtractingDuration}
                 className="hidden"
                 onChange={handleOfflineFileSelect}
               />
             </label>
           </div>
+
+          {offlineDurationError && (
+            <div className="p-3 bg-rose-500/15 border border-rose-500/30 rounded-xl text-rose-300 text-xs flex items-center gap-2">
+              <AlertCircle className="w-4 h-4 shrink-0 text-rose-400" />
+              <span>{offlineDurationError}</span>
+            </div>
+          )}
         </div>
       )}
 

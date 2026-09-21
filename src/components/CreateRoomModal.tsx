@@ -7,6 +7,7 @@ import {
 } from "../lib/firebase";
 import { ref, set } from "firebase/database";
 import { Movie, Room } from "../types";
+import { getVideoDuration, formatVideoTime } from "../lib/videoUtils";
 import { 
   X, 
   Tv, 
@@ -120,6 +121,7 @@ export function CreateRoomModal({
       let movieUrl = "";
       let movieId = "";
       let offlineFileName = "";
+      let offlineDuration: number | undefined = undefined;
 
       if (sourceType === "firestore") {
         const found = movies.find((m) => m.id === selectedMovieId);
@@ -146,6 +148,13 @@ export function CreateRoomModal({
           setIsCreating(false);
           return;
         }
+        try {
+          offlineDuration = await getVideoDuration(offlineFile);
+        } catch (durErr: any) {
+          setError(durErr.message || "This device/browser cannot play or decode this video format.");
+          setIsCreating(false);
+          return;
+        }
         movieTitle = offlineFile.name.replace(/\.[^/.]+$/, "");
         offlineFileName = offlineFile.name;
         movieUrl = `offline://${offlineFile.name}`;
@@ -164,6 +173,7 @@ export function CreateRoomModal({
         moviePoster,
         movieUrl,
         offlineFileName,
+        offlineDuration,
         playbackState: {
           isPlaying: false,
           currentTime: 0,

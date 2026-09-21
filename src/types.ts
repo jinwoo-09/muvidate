@@ -58,6 +58,7 @@ export interface Room {
   moviePoster?: string;
   movieUrl: string;
   offlineFileName?: string;
+  offlineDuration?: number;
   playbackState: RoomPlaybackState;
   controlsLocked: boolean;
   movieCompleted: boolean;

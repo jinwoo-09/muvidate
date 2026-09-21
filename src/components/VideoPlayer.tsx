@@ -361,7 +361,7 @@ function VideoPlayerComponent({
       const err = video.error;
       let msg = "Playback failed: Unable to load or play video stream.";
       if (err?.code === MediaError.MEDIA_ERR_SRC_NOT_SUPPORTED) {
-        msg = "The format or codec of this video is not supported by your browser.";
+        msg = "This device/browser cannot play this video format or codec.";
       } else if (err?.code === MediaError.MEDIA_ERR_NETWORK) {
         msg = "A network error caused the video download to fail.";
       }
