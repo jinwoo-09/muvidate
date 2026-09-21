@@ -10,13 +10,16 @@ export function getVideoDuration(file: File): Promise<number> {
   return new Promise((resolve, reject) => {
     const video = document.createElement("video");
     video.preload = "metadata";
+    video.playsInline = true;
+    video.setAttribute("playsinline", "true");
+    video.muted = true;
 
     const objectUrl = URL.createObjectURL(file);
     video.src = objectUrl;
 
     let timeoutId: number | null = window.setTimeout(() => {
       cleanup();
-      reject(new Error("Timed out reading video duration. This file or format may be unsupported by your browser."));
+      reject(new Error("Timed out reading video duration. Android Chrome cannot decode this video's codec."));
     }, 10000);
 
     const cleanup = () => {
@@ -33,7 +36,7 @@ export function getVideoDuration(file: File): Promise<number> {
       const duration = video.duration;
       cleanup();
       if (isNaN(duration) || !isFinite(duration) || duration <= 0) {
-        reject(new Error("Unable to determine video duration."));
+        reject(new Error("Android Chrome cannot decode this video's codec. Please select a video encoded with a codec supported by your device."));
       } else {
         resolve(duration);
       }
@@ -41,7 +44,7 @@ export function getVideoDuration(file: File): Promise<number> {
 
     video.onerror = () => {
       cleanup();
-      reject(new Error("This device/browser cannot play or decode this video format."));
+      reject(new Error("Android Chrome cannot decode this video's codec. Please select a video encoded with a codec supported by your device."));
     };
   });
 }

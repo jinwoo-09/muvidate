@@ -356,12 +356,21 @@ function VideoPlayerComponent({
       }
     };
 
+    const onLoadedData = () => {
+      setIsBuffering(false);
+      setPlaybackError(null);
+    };
+
     const onError = () => {
       setIsBuffering(false);
       const err = video.error;
       let msg = "Playback failed: Unable to load or play video stream.";
-      if (err?.code === MediaError.MEDIA_ERR_SRC_NOT_SUPPORTED) {
-        msg = "This device/browser cannot play this video format or codec.";
+      if (
+        err?.code === MediaError.MEDIA_ERR_SRC_NOT_SUPPORTED ||
+        err?.code === MediaError.MEDIA_ERR_DECODE ||
+        src.startsWith("blob:")
+      ) {
+        msg = "Android Chrome cannot decode this video's codec. Please select a video encoded with a codec supported by your device.";
       } else if (err?.code === MediaError.MEDIA_ERR_NETWORK) {
         msg = "A network error caused the video download to fail.";
       }
@@ -377,6 +386,7 @@ function VideoPlayerComponent({
     video.addEventListener("pause", onPause);
     video.addEventListener("timeupdate", onTimeUpdate);
     video.addEventListener("loadedmetadata", onLoadedMetadata);
+    video.addEventListener("loadeddata", onLoadedData);
     video.addEventListener("waiting", onWaiting);
     video.addEventListener("stalled", onStalled);
     video.addEventListener("playing", onPlaying);
@@ -391,6 +401,7 @@ function VideoPlayerComponent({
       video.removeEventListener("pause", onPause);
       video.removeEventListener("timeupdate", onTimeUpdate);
       video.removeEventListener("loadedmetadata", onLoadedMetadata);
+      video.removeEventListener("loadeddata", onLoadedData);
       video.removeEventListener("waiting", onWaiting);
       video.removeEventListener("stalled", onStalled);
       video.removeEventListener("playing", onPlaying);
@@ -837,7 +848,7 @@ function VideoPlayerComponent({
         src={src}
         poster={poster}
         playsInline
-        preload="auto"
+        preload="metadata"
         className="w-full h-full object-contain cursor-pointer"
         onClick={handleVideoClick}
       />

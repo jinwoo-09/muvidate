@@ -114,7 +114,8 @@ export function WatchRoom({ roomCode, initialOfflineFile, onLeaveRoom }: WatchRo
       lastProcessedMediaKeyRef.current = `${room.movieSource}:${room.movieUrl}`;
     } else {
       const currentKey = `offline:${room.offlineFileName}:${room.offlineDuration}`;
-      if (lastProcessedMediaKeyRef.current && lastProcessedMediaKeyRef.current !== currentKey) {
+      // Only reset localVideoUrl on actual media switches after room has already initialized
+      if (lastProcessedMediaKeyRef.current !== "" && lastProcessedMediaKeyRef.current !== currentKey) {
         if (localVideoUrl && !isHost) {
           if (activeObjectUrlRef.current && activeObjectUrlRef.current.startsWith("blob:")) {
             URL.revokeObjectURL(activeObjectUrlRef.current);
