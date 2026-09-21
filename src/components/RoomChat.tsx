@@ -5,7 +5,7 @@ import { ref, onValue, off, push, set } from "firebase/database";
 import { ChatMessage } from "../types";
 import { VoiceNoteRecorder } from "./VoiceNoteRecorder";
 import { VoiceNotePlayer } from "./VoiceNotePlayer";
-import { Send, MessageSquare, Shield, Smile } from "lucide-react";
+import { Send, MessageSquare, Shield, Smile, X } from "lucide-react";
 
 interface RoomChatProps {
   roomCode: string;
@@ -25,6 +25,7 @@ export function RoomChat({
   const [inputText, setInputText] = useState("");
   const [isSending, setIsSending] = useState(false);
   const messagesEndRef = useRef<HTMLDivElement>(null);
+  const [selectedAvatar, setSelectedAvatar] = useState<{ username: string; photoURL: string; initials: string } | null>(null);
 
   useEffect(() => {
     const chatRef = ref(rtdb, `rooms/${roomCode}/chat`);
@@ -134,6 +135,21 @@ export function RoomChat({
           </div>
         ) : (
           messages.map((msg) => {
+            const isSystem = msg.type === "system";
+            if (isSystem) {
+              return (
+                <div
+                  key={msg.id}
+                  className="flex justify-center w-full my-2 animate-in fade-in zoom-in-95 duration-200"
+                >
+                  <div className="px-4 py-1.5 rounded-full text-[11px] font-medium bg-neutral-900 border border-neutral-800 text-neutral-400 flex items-center gap-1.5 shadow-sm">
+                    <span className="w-1.5 h-1.5 rounded-full bg-rose-500 animate-pulse" />
+                    <span>{msg.text}</span>
+                  </div>
+                </div>
+              );
+            }
+
             const isMe = msg.uid === user?.uid;
             const isHost = msg.uid === adminUid;
             const initials = msg.username ? msg.username.slice(0, 2).toUpperCase() : "U";
@@ -144,7 +160,14 @@ export function RoomChat({
                 className={`flex gap-2.5 items-start ${isMe ? "flex-row-reverse" : "flex-row"}`}
               >
                 {/* Avatar */}
-                <div className="w-7 h-7 rounded-full overflow-hidden bg-neutral-800 shrink-0 border border-neutral-700 flex items-center justify-center text-[10px] font-bold text-neutral-300 shadow-sm mt-0.5">
+                <div 
+                  onClick={() => setSelectedAvatar({
+                    username: msg.username,
+                    photoURL: msg.photoURL || "",
+                    initials
+                  })}
+                  className="w-7 h-7 rounded-full overflow-hidden bg-neutral-800 shrink-0 border border-neutral-700 flex items-center justify-center text-[10px] font-bold text-neutral-300 shadow-sm mt-0.5 cursor-pointer hover:scale-105 active:scale-95 transition"
+                >
                   {msg.photoURL ? (
                     <img
                       src={msg.photoURL}
@@ -228,6 +251,47 @@ export function RoomChat({
           </form>
         )}
       </div>
+
+      {/* Avatar Image Popup Overlay */}
+      {selectedAvatar && (
+        <div
+          onClick={() => setSelectedAvatar(null)}
+          className="fixed inset-0 bg-black/85 backdrop-blur-md z-50 flex items-center justify-center p-4 animate-in fade-in duration-200"
+        >
+          <div
+            onClick={(e) => e.stopPropagation()}
+            className="relative flex flex-col items-center max-w-xs w-full animate-in zoom-in-95 duration-200"
+          >
+            {/* Close Button */}
+            <button
+              onClick={() => setSelectedAvatar(null)}
+              className="absolute -top-12 right-0 p-2 rounded-full bg-neutral-900/80 border border-neutral-800 text-neutral-400 hover:text-white transition"
+              aria-label="Close profile picture"
+            >
+              <X className="w-5 h-5" />
+            </button>
+
+            {/* Avatar Circle */}
+            <div className="w-48 h-48 rounded-full overflow-hidden border-4 border-rose-600 bg-neutral-900 shadow-2xl flex items-center justify-center text-4xl font-bold text-neutral-200">
+              {selectedAvatar.photoURL ? (
+                <img
+                  src={selectedAvatar.photoURL}
+                  alt={selectedAvatar.username}
+                  className="w-full h-full object-cover"
+                  referrerPolicy="no-referrer"
+                ></img>
+              ) : (
+                <span>{selectedAvatar.initials}</span>
+              )}
+            </div>
+
+            {/* Username underneath */}
+            <p className="mt-4 text-sm font-bold text-white tracking-wide bg-neutral-900/80 border border-neutral-800 px-3 py-1.5 rounded-full shadow">
+              @{selectedAvatar.username}
+            </p>
+          </div>
+        </div>
+      )}
     </div>
   );
 }

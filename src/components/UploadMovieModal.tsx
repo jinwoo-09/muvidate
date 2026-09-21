@@ -1,4 +1,5 @@
 import React, { useState, useRef, useEffect } from "react";
+import { useAuth } from "../context/AuthContext";
 import { uploadFileToWorker } from "../lib/workerApi";
 import { addMovieToFirestore } from "../lib/firebase";
 import { 
@@ -53,6 +54,7 @@ const PREDEFINED_GENRES = [
 const MAX_MOVIE_SIZE = 1024 * 1024 * 1024; // 1 GB in bytes
 
 export function UploadMovieModal({ isOpen, onClose, onMovieAdded }: UploadMovieModalProps) {
+  const { profile } = useAuth();
   const [title, setTitle] = useState("");
   const [selectedGenres, setSelectedGenres] = useState<string[]>([]);
   const [isGenreDropdownOpen, setIsGenreDropdownOpen] = useState(false);
@@ -88,6 +90,7 @@ export function UploadMovieModal({ isOpen, onClose, onMovieAdded }: UploadMovieM
   }, []);
 
   if (!isOpen) return null;
+  if (profile?.subscription !== "premium") return null;
 
   const handleToggleGenre = (g: string) => {
     if (selectedGenres.includes(g)) {
@@ -177,6 +180,11 @@ export function UploadMovieModal({ isOpen, onClose, onMovieAdded }: UploadMovieM
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
     setError(null);
+
+    if (profile?.subscription !== "premium") {
+      setError("Only premium members can upload movies to Firestore.");
+      return;
+    }
 
     // Mandatory field check
     if (!title.trim()) {

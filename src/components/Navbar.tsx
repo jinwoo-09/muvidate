@@ -101,13 +101,15 @@ export function Navbar({
             <span>Create Room</span>
           </button>
 
-          <button
-            onClick={onUploadMovieClick}
-            className="p-2 bg-neutral-900 hover:bg-neutral-800 border border-neutral-750 text-neutral-300 hover:text-white rounded-xl transition"
-            title="Upload Movie to Firestore"
-          >
-            <Upload className="w-4 h-4" />
-          </button>
+          {profile?.subscription === "premium" && (
+            <button
+              onClick={onUploadMovieClick}
+              className="p-2 bg-neutral-900 hover:bg-neutral-800 border border-neutral-750 text-neutral-300 hover:text-white rounded-xl transition"
+              title="Upload Movie to Firestore"
+            >
+              <Upload className="w-4 h-4" />
+            </button>
+          )}
 
           {/* Profile Button */}
           <button
@@ -210,26 +212,40 @@ export function Navbar({
             </a>
 
             <div className="flex items-center justify-between pt-1">
-              <button
-                onClick={() => {
-                  setMobileMenuOpen(false);
-                  onUploadMovieClick();
-                }}
-                className="text-xs text-neutral-400 hover:text-white flex items-center gap-2 py-1.5"
-              >
-                <Upload className="w-4 h-4 text-neutral-500" />
-                <span>Upload Movie (MP4)</span>
-              </button>
+              {profile?.subscription === "premium" ? (
+                <>
+                  <button
+                    onClick={() => {
+                      setMobileMenuOpen(false);
+                      onUploadMovieClick();
+                    }}
+                    className="text-xs text-neutral-400 hover:text-white flex items-center gap-2 py-1.5"
+                  >
+                    <Upload className="w-4 h-4 text-neutral-500" />
+                    <span>Upload Movie (MP4)</span>
+                  </button>
 
-              <button
-                onClick={() => {
-                  setMobileMenuOpen(false);
-                  onProfileClick();
-                }}
-                className="text-xs text-rose-400 font-medium py-1.5"
-              >
-                Profile Settings
-              </button>
+                  <button
+                    onClick={() => {
+                      setMobileMenuOpen(false);
+                      onProfileClick();
+                    }}
+                    className="text-xs text-rose-400 font-medium py-1.5"
+                  >
+                    Profile Settings
+                  </button>
+                </>
+              ) : (
+                <button
+                  onClick={() => {
+                    setMobileMenuOpen(false);
+                    onProfileClick();
+                  }}
+                  className="w-full text-center text-xs text-rose-400 font-semibold py-1.5 bg-neutral-900 hover:bg-neutral-850 rounded-xl border border-neutral-800 transition"
+                >
+                  Profile Settings
+                </button>
+              )}
             </div>
           </div>
         </div>

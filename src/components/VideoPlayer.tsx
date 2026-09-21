@@ -66,6 +66,19 @@ function VideoPlayerComponent({
   const [playbackError, setPlaybackError] = useState<string | null>(null);
   const [showControls, setShowControls] = useState(true);
   const [showAudioMenu, setShowAudioMenu] = useState(false);
+  const [showDisplayMenu, setShowDisplayMenu] = useState(false);
+  const [displayMode, setDisplayMode] = useState<"fit" | "zoom" | "stretch">("fit");
+
+  useEffect(() => {
+    const handleGlobalClick = () => {
+      setShowAudioMenu(false);
+      setShowDisplayMenu(false);
+    };
+    window.addEventListener("click", handleGlobalClick);
+    return () => {
+      window.removeEventListener("click", handleGlobalClick);
+    };
+  }, []);
 
   // Fullscreen chat message overlay
   const [fullscreenChatOverlay, setFullscreenChatOverlay] = useState<{
@@ -849,7 +862,13 @@ function VideoPlayerComponent({
         poster={poster}
         playsInline
         preload="metadata"
-        className="w-full h-full object-contain cursor-pointer"
+        className={`w-full h-full cursor-pointer ${
+          displayMode === "fit"
+            ? "object-contain"
+            : displayMode === "zoom"
+              ? "object-cover"
+              : "object-fill"
+        }`}
         onClick={handleVideoClick}
       />
 
@@ -1114,6 +1133,52 @@ function VideoPlayerComponent({
                 )}
               </div>
             )}
+
+            {/* Display Scale Mode Control */}
+            <div className="relative">
+              <button
+                onClick={(e) => {
+                  e.stopPropagation();
+                  setShowDisplayMenu(!showDisplayMenu);
+                  setShowAudioMenu(false);
+                  resetControlsTimeout();
+                }}
+                className={`px-2 py-1 rounded-lg transition text-xs font-semibold uppercase tracking-wider flex items-center gap-1 ${
+                  showDisplayMenu ? "bg-rose-600 text-white" : "hover:bg-white/15 text-neutral-300 hover:text-white"
+                }`}
+                title="Change display scale mode"
+              >
+                <span>Scale: {displayMode}</span>
+              </button>
+              {showDisplayMenu && (
+                <div
+                  onClick={(e) => {
+                    e.stopPropagation();
+                    resetControlsTimeout();
+                  }}
+                  className="absolute right-0 bottom-full mb-2 bg-neutral-900 border border-neutral-750 rounded-xl p-1.5 shadow-xl w-32 z-30 flex flex-col gap-0.5 animate-in fade-in slide-in-from-bottom-2 duration-150"
+                >
+                  <p className="text-[10px] font-semibold uppercase tracking-wider text-neutral-400 px-2 py-1">
+                    Scale Mode
+                  </p>
+                  {(["fit", "zoom", "stretch"] as const).map((mode) => (
+                    <button
+                      key={mode}
+                      onClick={() => {
+                        setDisplayMode(mode);
+                        setShowDisplayMenu(false);
+                      }}
+                      className={`w-full text-left px-2.5 py-1.5 rounded-lg text-xs flex items-center justify-between transition capitalize ${
+                        displayMode === mode ? "bg-rose-600 text-white font-semibold" : "text-neutral-300 hover:bg-neutral-800"
+                      }`}
+                    >
+                      <span>{mode}</span>
+                      {displayMode === mode && <Check className="w-3.5 h-3.5 shrink-0" />}
+                    </button>
+                  ))}
+                </div>
+              )}
+            </div>
 
             {/* Fullscreen Button (Available to all users, even if locked) */}
             <button

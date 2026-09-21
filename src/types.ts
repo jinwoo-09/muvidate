@@ -5,6 +5,7 @@ export interface UserProfile {
   photoURL: string;
   createdAt: any;
   updatedAt: any;
+  subscription?: string;
 }
 
 export interface Movie {
@@ -42,7 +43,7 @@ export interface ChatMessage {
   uid: string;
   username: string;
   photoURL?: string;
-  type: 'text' | 'voice';
+  type: 'text' | 'voice' | 'system';
   text?: string;
   audioUrl?: string;
   createdAt: number;

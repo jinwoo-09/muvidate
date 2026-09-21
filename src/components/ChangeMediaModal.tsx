@@ -15,7 +15,8 @@ import {
   Check, 
   Sparkles,
   RefreshCw,
-  Video
+  Video,
+  Smartphone
 } from "lucide-react";
 
 interface ChangeMediaModalProps {
@@ -498,6 +499,24 @@ export function ChangeMediaModal({
                   }}
                   className="w-full text-xs text-neutral-400 file:mr-3 file:py-1.5 file:px-3 file:rounded-lg file:border-0 file:text-xs file:font-semibold file:bg-neutral-800 file:text-white hover:file:bg-neutral-700 cursor-pointer"
                 />
+              </div>
+
+              <div className="p-3 bg-emerald-500/10 border border-emerald-500/30 rounded-xl text-[11px] flex flex-col gap-1.5 mt-2">
+                <p className="font-semibold text-emerald-400 flex items-center gap-1.5">
+                  <Smartphone className="w-4 h-4 shrink-0 text-emerald-400" />
+                  Using Android?
+                </p>
+                <p className="text-neutral-300 leading-relaxed">
+                  Android Chrome has limited video codec support. For the best playback experience and codec compatibility, we highly recommend downloading and installing our native Android app:
+                </p>
+                <a
+                  href="https://github.com/jinwoo-09/muvidate/releases/download/1.0/Muvidate_1.0.apk"
+                  target="_blank"
+                  rel="noopener noreferrer"
+                  className="text-emerald-400 hover:text-emerald-300 font-semibold underline break-all"
+                >
+                  https://github.com/jinwoo-09/muvidate/releases/download/1.0/Muvidate_1.0.apk
+                </a>
               </div>
 
               {offlineFile && (

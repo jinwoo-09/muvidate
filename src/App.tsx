@@ -1,6 +1,7 @@
 import React, { useState, useEffect, useMemo } from "react";
 import { AuthProvider, useAuth } from "./context/AuthContext";
-import { subscribeToMovies } from "./lib/firebase";
+import { subscribeToMovies, rtdb } from "./lib/firebase";
+import { ref, onValue, off } from "firebase/database";
 import { Movie } from "./types";
 import { Navbar } from "./components/Navbar";
 import { HeroBanner } from "./components/HeroBanner";
@@ -28,12 +29,58 @@ import {
 } from "lucide-react";
 
 function MainContent() {
-  const { loading: authLoading } = useAuth();
+  const { loading: authLoading, profile, user } = useAuth();
+  const isPremium = profile?.subscription === "premium";
 
   const [movies, setMovies] = useState<Movie[]>([]);
   const [loadingMovies, setLoadingMovies] = useState(true);
   const [searchQuery, setSearchQuery] = useState("");
   const [selectedGenre, setSelectedGenre] = useState("All");
+
+  const [activeUserRooms, setActiveUserRooms] = useState<any[]>([]);
+
+  // Subscribe to user's active watch rooms
+  useEffect(() => {
+    if (!user) {
+      setActiveUserRooms([]);
+      return;
+    }
+
+    const roomsRef = ref(rtdb, "rooms");
+    const handleData = (snapshot: any) => {
+      const data = snapshot.val();
+      if (!data) {
+        setActiveUserRooms([]);
+        return;
+      }
+
+      const now = Date.now();
+      const roomsList = Object.entries(data).map(([code, r]: [string, any]) => ({
+        roomCode: code,
+        ...r
+      }));
+
+      const myActiveRooms = roomsList.filter((room: any) => {
+        const isNotExpired = room.expiresAt ? room.expiresAt > now : true;
+        const isNotCompleted = room.movieCompleted !== true;
+
+        if (!isNotExpired || !isNotCompleted) return false;
+
+        const isHost = room.adminUid === user.uid;
+        const isParticipant = room.participants && room.participants[user.uid];
+
+        return isHost || isParticipant;
+      });
+
+      setActiveUserRooms(myActiveRooms);
+    };
+
+    onValue(roomsRef, handleData);
+
+    return () => {
+      off(roomsRef, "value", handleData);
+    };
+  }, [user]);
 
   // Navigation / Active View
   const [activeRoomCode, setActiveRoomCode] = useState<string | null>(null);
@@ -275,6 +322,58 @@ function MainContent() {
           </div>
         </section>
 
+        {/* Active Watch Rooms You're In */}
+        {activeUserRooms.length > 0 && (
+          <section className="space-y-4">
+            <div className="flex items-center gap-2">
+              <Tv className="w-4 h-4 text-rose-500 animate-pulse" />
+              <h2 className="text-base sm:text-lg font-bold font-heading text-white">
+                Active Watch Rooms You're In
+              </h2>
+            </div>
+            <div className="grid grid-cols-1 md:grid-cols-2 gap-4 animate-in fade-in slide-in-from-top-4 duration-300">
+              {activeUserRooms.map((room) => (
+                <div
+                  key={room.roomCode}
+                  className="p-4 bg-neutral-900/60 border border-neutral-850 rounded-2xl flex gap-4 items-center transition hover:border-neutral-800 shadow-sm"
+                >
+                  <div className="w-14 h-20 bg-neutral-950 border border-neutral-800 rounded-lg flex items-center justify-center shrink-0 overflow-hidden shadow-sm">
+                    {room.moviePoster ? (
+                      <img
+                        src={room.moviePoster}
+                        alt={room.movieTitle}
+                        className="w-full h-full object-cover"
+                        referrerPolicy="no-referrer"
+                      />
+                    ) : (
+                      <Clapperboard className="w-6 h-6 text-neutral-600" />
+                    )}
+                  </div>
+                  <div className="flex-1 min-w-0">
+                    <h3 className="text-sm font-bold text-white truncate mb-0.5">
+                      {room.movieTitle}
+                    </h3>
+                    <div className="flex flex-wrap items-center gap-2 mt-1">
+                      <span className="text-[10px] font-bold bg-neutral-800 text-neutral-300 border border-neutral-750 px-2 py-0.5 rounded-full">
+                        Code: {room.roomCode}
+                      </span>
+                      <span className="text-[10px] font-medium text-neutral-400">
+                        Host: @{room.adminUsername || "Host"}
+                      </span>
+                    </div>
+                  </div>
+                  <button
+                    onClick={() => setActiveRoomCode(room.roomCode)}
+                    className="px-3.5 py-1.5 bg-rose-600 hover:bg-rose-500 text-white text-xs font-semibold rounded-xl transition shadow shadow-rose-600/10 flex items-center gap-1 shrink-0"
+                  >
+                    <span>Rejoin</span>
+                  </button>
+                </div>
+              ))}
+            </div>
+          </section>
+        )}
+
         {/* Genre Pill Filters */}
         <section className="space-y-3">
           <div className="flex items-center justify-between">
@@ -345,7 +444,9 @@ function MainContent() {
               <p className="text-xs text-neutral-400 max-w-sm mb-5 leading-relaxed">
                 {searchQuery
                   ? `No titles matched "${searchQuery}". Try searching for another genre or keyword.`
-                  : "Upload the first MP4 movie to MuviDate or stream via direct URL."}
+                  : isPremium
+                    ? "Upload the first MP4 movie to MuviDate or stream via direct URL."
+                    : "Create a Watch Room with an offline video or direct URL to start watching together!"}
               </p>
               {searchQuery ? (
                 <button
@@ -357,13 +458,21 @@ function MainContent() {
                 >
                   Clear Filters
                 </button>
-              ) : (
+              ) : isPremium ? (
                 <button
                   onClick={() => setIsUploadMovieOpen(true)}
                   className="px-5 py-2.5 bg-rose-600 hover:bg-rose-500 text-white text-xs font-semibold rounded-xl shadow transition flex items-center gap-1.5"
                 >
                   <PlusCircle className="w-4 h-4" />
                   <span>Upload Movie Now</span>
+                </button>
+              ) : (
+                <button
+                  onClick={() => handleStartCreateRoom()}
+                  className="px-5 py-2.5 bg-rose-600 hover:bg-rose-500 text-white text-xs font-semibold rounded-xl shadow transition flex items-center gap-1.5"
+                >
+                  <PlusCircle className="w-4 h-4" />
+                  <span>Create Watch Room</span>
                 </button>
               )}
             </div>

@@ -1,7 +1,7 @@
 import React, { useState, useEffect, useRef, useCallback, useMemo } from "react";
 import { useAuth } from "../context/AuthContext";
 import { rtdb } from "../lib/firebase";
-import { ref, onValue, off, update, set } from "firebase/database";
+import { ref, onValue, off, update, set, push, onDisconnect } from "firebase/database";
 import { Room, RoomParticipant } from "../types";
 import { getVideoDuration, formatVideoTime } from "../lib/videoUtils";
 import { VideoPlayer } from "./VideoPlayer";
@@ -23,7 +23,8 @@ import {
   Clock, 
   ArrowLeft,
   RefreshCw,
-  Loader2 
+  Loader2,
+  Smartphone 
 } from "lucide-react";
 
 interface WatchRoomProps {
@@ -98,6 +99,22 @@ export function WatchRoom({ roomCode, initialOfflineFile, onLeaveRoom }: WatchRo
 
   const isHost = user?.uid === room?.adminUid;
   const lastProcessedMediaKeyRef = useRef<string>("");
+
+  const hasPostedJoinRef = useRef(false);
+  const prevParticipantsRef = useRef<Record<string, boolean>>({});
+
+  const postSystemMessage = useCallback((text: string) => {
+    const chatRef = ref(rtdb, `rooms/${roomCode}/chat`);
+    const newMsgRef = push(chatRef);
+    set(newMsgRef, {
+      id: newMsgRef.key || Date.now().toString(),
+      uid: "system",
+      username: "System",
+      type: "system",
+      text,
+      createdAt: Date.now()
+    }).catch(console.error);
+  }, [roomCode]);
 
   useEffect(() => {
     if (!room) return;
@@ -198,7 +215,7 @@ export function WatchRoom({ roomCode, initialOfflineFile, onLeaveRoom }: WatchRo
 
     onValue(roomRef, handleRoomData);
 
-    // Update participant online status
+    // Update participant online status with onDisconnect support
     if (user && profile) {
       const participantRef = ref(rtdb, `rooms/${roomCode}/participants/${user.uid}`);
       update(participantRef, {
@@ -207,6 +224,8 @@ export function WatchRoom({ roomCode, initialOfflineFile, onLeaveRoom }: WatchRo
         username: profile.username,
         photoURL: profile.photoURL || ""
       });
+      // Setup onDisconnect
+      onDisconnect(participantRef).update({ isOnline: false }).catch(() => {});
     }
 
     return () => {
@@ -217,6 +236,68 @@ export function WatchRoom({ roomCode, initialOfflineFile, onLeaveRoom }: WatchRo
       }
     };
   }, [roomCode, user, profile]);
+
+  // Post system message when current user joins
+  useEffect(() => {
+    if (user && profile && roomCode && !hasPostedJoinRef.current) {
+      hasPostedJoinRef.current = true;
+      postSystemMessage(`@${profile.username} has joined the room.`);
+    }
+  }, [user, profile, roomCode, postSystemMessage]);
+
+  // Post system message when current user leaves (clean exit)
+  useEffect(() => {
+    return () => {
+      if (user && profile && roomCode) {
+        const chatRef = ref(rtdb, `rooms/${roomCode}/chat`);
+        const newMsgRef = push(chatRef);
+        set(newMsgRef, {
+          id: newMsgRef.key || Date.now().toString(),
+          uid: "system",
+          username: "System",
+          type: "system",
+          text: `@${profile.username} has left the room.`,
+          createdAt: Date.now()
+        }).catch(() => {});
+      }
+    };
+  }, [user, profile, roomCode]);
+
+  // Track other participants' online status changes for abrupt leaves
+  useEffect(() => {
+    if (!room || !room.participants || !user) return;
+
+    const currentParticipants = room.participants;
+    const prevParticipants = prevParticipantsRef.current;
+
+    const isHostOnline = room.participants[room.adminUid]?.isOnline;
+    const isCurrentUserHost = user.uid === room.adminUid;
+
+    const activeParticipants = Object.values(room.participants)
+      .filter((p) => p.isOnline)
+      .sort((a, b) => a.uid.localeCompare(b.uid));
+
+    const isResponsibleForOthers = isCurrentUserHost || (!isHostOnline && activeParticipants[0]?.uid === user.uid);
+
+    Object.entries(currentParticipants).forEach(([uid, p]) => {
+      if (uid === user.uid) return;
+
+      const wasOnline = prevParticipants[uid] === true;
+      const isOnline = p.isOnline === true;
+
+      if (wasOnline && !isOnline) {
+        if (isResponsibleForOthers) {
+          postSystemMessage(`@${p.username} has left the room.`);
+        }
+      }
+    });
+
+    const nextStatuses: Record<string, boolean> = {};
+    Object.entries(currentParticipants).forEach(([uid, p]) => {
+      nextStatuses[uid] = !!p.isOnline;
+    });
+    prevParticipantsRef.current = nextStatuses;
+  }, [room?.participants, user?.uid, roomCode, postSystemMessage]);
 
 // Sync state emitter from VideoPlayer
   const handlePlaybackChange = useCallback((state: { isPlaying: boolean; currentTime: number }) => {
@@ -559,6 +640,24 @@ export function WatchRoom({ roomCode, initialOfflineFile, onLeaveRoom }: WatchRo
               <span>{offlineDurationError}</span>
             </div>
           )}
+
+          <div className="p-3 bg-emerald-500/10 border border-emerald-500/30 rounded-xl text-[11px] flex flex-col gap-1 sm:gap-1.5 mt-2">
+            <p className="font-semibold text-emerald-400 flex items-center gap-1.5">
+              <Smartphone className="w-4 h-4 shrink-0 text-emerald-400" />
+              Using Android?
+            </p>
+            <p className="text-neutral-300 leading-relaxed">
+              Android Chrome has limited video codec support. For the best playback experience and codec compatibility, we highly recommend downloading and installing our native Android app:
+            </p>
+            <a
+              href="https://github.com/jinwoo-09/muvidate/releases/download/1.0/Muvidate_1.0.apk"
+              target="_blank"
+              rel="noopener noreferrer"
+              className="text-emerald-400 hover:text-emerald-300 font-semibold underline break-all"
+            >
+              https://github.com/jinwoo-09/muvidate/releases/download/1.0/Muvidate_1.0.apk
+            </a>
+          </div>
         </div>
       )}
 
