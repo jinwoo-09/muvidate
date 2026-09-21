@@ -190,16 +190,12 @@ export function ChangeMediaModal({
 
       const now = Date.now();
 
-      // Update room media in RTDB
+      // Update room media in RTDB safely without any undefined parameters
       const roomRef = ref(rtdb, `rooms/${roomCode}`);
-      await update(roomRef, {
+      const updateData: any = {
         movieSource,
-        movieId,
         movieTitle,
-        moviePoster,
         movieUrl,
-        offlineFileName,
-        offlineDuration,
         movieCompleted: false,
         playbackState: {
           isPlaying: false,
@@ -209,7 +205,37 @@ export function ChangeMediaModal({
           updatedByUsername: profile.username,
           audioTrackIndex: 0
         }
-      });
+      };
+
+      if (movieId) {
+        updateData.movieId = movieId;
+      } else {
+        updateData.movieId = null;
+      }
+
+      if (moviePoster) {
+        updateData.moviePoster = moviePoster;
+      } else {
+        updateData.moviePoster = null;
+      }
+
+      if (movieSource === "offline") {
+        if (offlineFileName) {
+          updateData.offlineFileName = offlineFileName;
+        } else {
+          updateData.offlineFileName = null;
+        }
+        if (typeof offlineDuration === "number" && Number.isFinite(offlineDuration) && offlineDuration > 0) {
+          updateData.offlineDuration = offlineDuration;
+        } else {
+          updateData.offlineDuration = null;
+        }
+      } else {
+        updateData.offlineFileName = null;
+        updateData.offlineDuration = null;
+      }
+
+      await update(roomRef, updateData);
 
       // If offline video selected, update local state & participant record
       if (activeSourceTab === "offline" && offlineFile) {

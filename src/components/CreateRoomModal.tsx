@@ -163,17 +163,13 @@ export function CreateRoomModal({
       const now = Date.now();
       const expiresAt = now + 24 * 60 * 60 * 1000; // 24 hours lifecycle
 
-      const roomData: Room = {
+      const roomData: any = {
         roomCode,
         adminUid: user.uid,
         adminUsername: profile.username,
         movieSource: sourceType,
-        movieId,
         movieTitle,
-        moviePoster,
         movieUrl,
-        offlineFileName,
-        offlineDuration,
         playbackState: {
           isPlaying: false,
           currentTime: 0,
@@ -196,6 +192,21 @@ export function CreateRoomModal({
           }
         }
       };
+
+      if (movieId) {
+        roomData.movieId = movieId;
+      }
+      if (moviePoster) {
+        roomData.moviePoster = moviePoster;
+      }
+      if (sourceType === "offline") {
+        if (offlineFileName) {
+          roomData.offlineFileName = offlineFileName;
+        }
+        if (typeof offlineDuration === "number" && Number.isFinite(offlineDuration) && offlineDuration > 0) {
+          roomData.offlineDuration = offlineDuration;
+        }
+      }
 
       // Save room to Realtime Database
       const roomRef = ref(rtdb, `rooms/${roomCode}`);
