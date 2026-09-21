@@ -14,10 +14,14 @@ import {
   Loader2, 
   AlertCircle,
   Headphones,
-  Crop
+  Crop,
+  Film,
+  Layers,
+  ChevronDown
 } from "lucide-react";
 import { rtdb } from "../lib/firebase";
 import { ref, onChildAdded, off, get } from "firebase/database";
+import { SeriesStructure, extractSeriesStructure, getEpisodeUrl } from "../lib/seriesUtils";
 
 export interface VideoPlayerProps {
   src: string;
@@ -37,6 +41,10 @@ export interface VideoPlayerProps {
   roomCode?: string;
   currentUserId?: string;
   isVoiceRecording?: boolean;
+  seriesStructure?: SeriesStructure;
+  currentSeason?: number;
+  currentEpisode?: number;
+  onSelectEpisode?: (seasonNum: number, episodeNum: number, episodeUrl: string) => void;
 }
 
 function VideoPlayerComponent({
@@ -50,7 +58,11 @@ function VideoPlayerComponent({
   onVideoEnded,
   roomCode,
   currentUserId,
-  isVoiceRecording = false
+  isVoiceRecording = false,
+  seriesStructure: propSeriesStructure,
+  currentSeason: propCurrentSeason,
+  currentEpisode: propCurrentEpisode,
+  onSelectEpisode
 }: VideoPlayerProps) {
   const containerRef = useRef<HTMLDivElement>(null);
   const videoRef = useRef<HTMLVideoElement>(null);
@@ -138,6 +150,89 @@ function VideoPlayerComponent({
   onVideoEndedRef.current = onVideoEnded;
 
   const canControl = isHost || !controlsLocked;
+
+  // Series / Season / Episode detection & state
+  const effectiveSeries = React.useMemo(() => {
+    if (propSeriesStructure) return propSeriesStructure;
+    return extractSeriesStructure(src);
+  }, [propSeriesStructure, src]);
+
+  const [localSeason, setLocalSeason] = useState(1);
+  const [localEpisode, setLocalEpisode] = useState(1);
+  const [isSeasonMenuOpen, setIsSeasonMenuOpen] = useState(false);
+  const [isEpisodeMenuOpen, setIsEpisodeMenuOpen] = useState(false);
+  const seasonMenuRef = useRef<HTMLDivElement>(null);
+  const episodeMenuRef = useRef<HTMLDivElement>(null);
+
+  const selectedSeasonNum = propCurrentSeason !== undefined ? propCurrentSeason : localSeason;
+  const selectedEpisodeNum = propCurrentEpisode !== undefined ? propCurrentEpisode : localEpisode;
+
+  const currentSeasonData = effectiveSeries.seasons.find(
+    (s) => s.seasonNumber === selectedSeasonNum
+  ) || effectiveSeries.seasons[0];
+
+  const currentSeasonEpisodes = currentSeasonData ? currentSeasonData.episodes : [];
+
+  // Close menus when clicking outside
+  useEffect(() => {
+    const handleOutsideClick = (e: MouseEvent) => {
+      if (
+        seasonMenuRef.current &&
+        !seasonMenuRef.current.contains(e.target as Node)
+      ) {
+        setIsSeasonMenuOpen(false);
+      }
+      if (
+        episodeMenuRef.current &&
+        !episodeMenuRef.current.contains(e.target as Node)
+      ) {
+        setIsEpisodeMenuOpen(false);
+      }
+    };
+    document.addEventListener("mousedown", handleOutsideClick);
+    return () => document.removeEventListener("mousedown", handleOutsideClick);
+  }, []);
+
+  const handleSelectSeason = (seasonNum: number) => {
+    resetControlsTimeout();
+    setIsSeasonMenuOpen(false);
+    if (!canControl) return;
+
+    const targetSeason = effectiveSeries.seasons.find((s) => s.seasonNumber === seasonNum);
+    const firstEp = targetSeason && targetSeason.episodes[0] ? targetSeason.episodes[0] : null;
+    const firstEpNum = firstEp ? firstEp.episodeNumber : 1;
+    const firstEpUrl = firstEp ? firstEp.url : "";
+
+    if (onSelectEpisode && firstEpUrl) {
+      onSelectEpisode(seasonNum, firstEpNum, firstEpUrl);
+    } else {
+      setLocalSeason(seasonNum);
+      setLocalEpisode(firstEpNum);
+      if (videoRef.current && firstEpUrl) {
+        videoRef.current.src = firstEpUrl;
+        videoRef.current.currentTime = 0;
+      }
+    }
+  };
+
+  const handleSelectEpisode = (episodeNum: number) => {
+    resetControlsTimeout();
+    setIsEpisodeMenuOpen(false);
+    if (!canControl) return;
+
+    const targetEp = currentSeasonEpisodes.find((ep) => ep.episodeNumber === episodeNum);
+    const epUrl = targetEp ? targetEp.url : "";
+
+    if (onSelectEpisode && epUrl) {
+      onSelectEpisode(selectedSeasonNum, episodeNum, epUrl);
+    } else {
+      setLocalEpisode(episodeNum);
+      if (videoRef.current && epUrl) {
+        videoRef.current.src = epUrl;
+        videoRef.current.currentTime = 0;
+      }
+    }
+  };
 
   // Handle voice note recording: mute video during recording without pausing; restore previous mute state afterwards
   useEffect(() => {
@@ -901,11 +996,115 @@ function VideoPlayerComponent({
         </div>
       )}
 
-      {/* Top-Left Overlays Container (Lock Notice & Fullscreen Chat Overlay) */}
-      <div className="absolute top-4 left-4 z-40 flex flex-col items-start gap-2 pointer-events-none max-w-[85vw] sm:max-w-sm">
+      {/* Top-Left Overlays Container (Series Controls, Lock Notice & Fullscreen Chat Overlay) */}
+      <div className="absolute top-4 left-4 z-40 flex flex-col items-start gap-2 pointer-events-none max-w-[90vw] sm:max-w-md">
+        {/* Episode / Season Controls for Series (Auto-hides with showControls, shown on interaction) */}
+        {effectiveSeries.isSeries && (
+          <div
+            className={`flex items-center flex-wrap gap-2 transition-opacity duration-300 pointer-events-auto ${
+              showControls ? "opacity-100" : "opacity-0 pointer-events-none"
+            }`}
+            onClick={(e) => e.stopPropagation()}
+          >
+            {/* Season Selector (only if multiple seasons exist) */}
+            {effectiveSeries.seasons.length > 1 && (
+              <div className="relative" ref={seasonMenuRef}>
+                <button
+                  type="button"
+                  onClick={() => {
+                    resetControlsTimeout();
+                    if (!canControl) return;
+                    setIsSeasonMenuOpen((prev) => !prev);
+                    setIsEpisodeMenuOpen(false);
+                  }}
+                  disabled={!canControl}
+                  className="flex items-center gap-1.5 px-2.5 py-1.5 rounded-xl bg-neutral-900/90 hover:bg-neutral-800 backdrop-blur-md border border-neutral-700/80 text-white text-xs font-semibold shadow-xl transition disabled:opacity-60 disabled:cursor-not-allowed"
+                  title={!canControl ? "Controls locked by host" : "Select Season"}
+                >
+                  <Layers className="w-3.5 h-3.5 text-rose-400 shrink-0" />
+                  <span>S{selectedSeasonNum}</span>
+                  <ChevronDown className="w-3 h-3 text-neutral-400 shrink-0" />
+                </button>
+
+                {isSeasonMenuOpen && (
+                  <div className="absolute top-full left-0 mt-1.5 w-36 max-h-56 overflow-y-auto bg-neutral-900/95 border border-neutral-700 rounded-xl shadow-2xl py-1 z-50 backdrop-blur-lg">
+                    {effectiveSeries.seasons.map((s) => (
+                      <button
+                        key={s.seasonNumber}
+                        type="button"
+                        onClick={() => handleSelectSeason(s.seasonNumber)}
+                        className={`w-full text-left px-3 py-1.5 text-xs flex items-center justify-between transition ${
+                          s.seasonNumber === selectedSeasonNum
+                            ? "bg-rose-500/20 text-rose-300 font-bold"
+                            : "text-neutral-200 hover:bg-neutral-800"
+                        }`}
+                      >
+                        <span>{s.label}</span>
+                        {s.seasonNumber === selectedSeasonNum && (
+                          <Check className="w-3.5 h-3.5 text-rose-400 shrink-0" />
+                        )}
+                      </button>
+                    ))}
+                  </div>
+                )}
+              </div>
+            )}
+
+            {/* Episode Selector */}
+            <div className="relative" ref={episodeMenuRef}>
+              <button
+                type="button"
+                onClick={() => {
+                  resetControlsTimeout();
+                  if (!canControl) return;
+                  setIsEpisodeMenuOpen((prev) => !prev);
+                  setIsSeasonMenuOpen(false);
+                }}
+                disabled={!canControl}
+                className="flex items-center gap-1.5 px-2.5 py-1.5 rounded-xl bg-neutral-900/90 hover:bg-neutral-800 backdrop-blur-md border border-neutral-700/80 text-white text-xs font-semibold shadow-xl transition disabled:opacity-60 disabled:cursor-not-allowed"
+                title={!canControl ? "Controls locked by host" : "Select Episode"}
+              >
+                <Film className="w-3.5 h-3.5 text-rose-400 shrink-0" />
+                <span>EP {selectedEpisodeNum}</span>
+                <span className="text-[10px] text-neutral-400 font-normal">
+                  ({currentSeasonEpisodes.length})
+                </span>
+                <ChevronDown className="w-3 h-3 text-neutral-400 shrink-0" />
+              </button>
+
+              {isEpisodeMenuOpen && (
+                <div className="absolute top-full left-0 mt-1.5 w-48 max-h-60 overflow-y-auto bg-neutral-900/95 border border-neutral-700 rounded-xl shadow-2xl py-1 z-50 backdrop-blur-lg">
+                  <div className="px-3 py-1 text-[10px] font-bold uppercase tracking-wider text-neutral-400 border-b border-neutral-800">
+                    {effectiveSeries.seasons.length > 1
+                      ? `Season ${selectedSeasonNum} Episodes`
+                      : "Episodes"}
+                  </div>
+                  {currentSeasonEpisodes.map((ep) => (
+                    <button
+                      key={ep.episodeNumber}
+                      type="button"
+                      onClick={() => handleSelectEpisode(ep.episodeNumber)}
+                      className={`w-full text-left px-3 py-2 text-xs flex items-center justify-between transition ${
+                        ep.episodeNumber === selectedEpisodeNum
+                          ? "bg-rose-500/20 text-rose-300 font-bold"
+                          : "text-neutral-200 hover:bg-neutral-800"
+                      }`}
+                    >
+                      <span className="truncate">{ep.label}</span>
+                      {ep.episodeNumber === selectedEpisodeNum && (
+                        <Check className="w-3.5 h-3.5 text-rose-400 shrink-0 ml-2" />
+                      )}
+                    </button>
+                  ))}
+                </div>
+              )}
+            </div>
+          </div>
+        )}
+
         {/* Control Lock Notice for non-admin */}
         {!canControl && (
-          <div className="flex items-center gap-1.5 px-3 py-1 rounded-full bg-neutral-900/85 backdrop-blur-md border border-amber-500/30 text-amber-400 text-xs font-medium shadow-lg">
+          <div className="flex items-center gap-1.5 px-3 py-1 rounded-full bg-neutral-900/85 backdrop-blur-md border border-amber-500/30 text-amber-400 text-xs font-medium shadow-lg pointer-events-auto">
             <Lock className="w-3.5 h-3.5" />
             <span>Host Locked Playback Controls</span>
           </div>

@@ -2,6 +2,7 @@ import React, { useState, useRef, useEffect } from "react";
 import { useAuth } from "../context/AuthContext";
 import { uploadFileToWorker } from "../lib/workerApi";
 import { addMovieToFirestore } from "../lib/firebase";
+import { parseEpisodeUrls } from "../lib/seriesUtils";
 import { 
   X, 
   UploadCloud, 
@@ -14,7 +15,8 @@ import {
   ChevronDown,
   Check,
   Search,
-  Link as LinkIcon
+  Link as LinkIcon,
+  Layers
 } from "lucide-react";
 
 interface UploadMovieModalProps {
@@ -68,6 +70,7 @@ export function UploadMovieModal({ isOpen, onClose, onMovieAdded }: UploadMovieM
   const [movieSourceMode, setMovieSourceMode] = useState<"file" | "url">("file");
   const [movieFile, setMovieFile] = useState<File | null>(null);
   const [movieUrlInput, setMovieUrlInput] = useState("");
+  const [seasonNumber, setSeasonNumber] = useState("");
 
   const [isUploading, setIsUploading] = useState(false);
   const [uploadProgress, setUploadProgress] = useState<number | null>(null);
@@ -111,8 +114,9 @@ export function UploadMovieModal({ isOpen, onClose, onMovieAdded }: UploadMovieM
     setMovieSourceMode(mode);
     setError(null);
     if (mode === "file") {
-      // Switching to file clears URL to avoid ambiguity
+      // Switching to file clears URL and resets season number (file is for single movie only)
       setMovieUrlInput("");
+      setSeasonNumber("");
     } else {
       // Switching to URL clears file to avoid ambiguity
       setMovieFile(null);
@@ -215,16 +219,19 @@ export function UploadMovieModal({ isOpen, onClose, onMovieAdded }: UploadMovieM
     }
 
     // Validate movie source: Exactly ONE must be supplied
+    let finalSeasonNum = 1;
+
     if (movieSourceMode === "file") {
+      finalSeasonNum = 1;
       if (!movieFile) {
         setError("MP4 Video file is mandatory when 'Upload MP4 File' is selected.");
         return;
       }
       if (movieUrlInput.trim()) {
-        setError("Only ONE movie source can be selected. Please clear the URL or choose 'MP4 URL'.");
+        setError("Only ONE movie source can be selected. Please clear the URL or choose 'Video URL'.");
         return;
       }
-      // Double check MP4 and 1 GB file size strictly before starting Worker upload
+      // MP4 File upload is allowed ONLY for normal single movie (Season 1)
       if (!movieFile.name.toLowerCase().endsWith(".mp4") || movieFile.size > MAX_MOVIE_SIZE) {
         setError("Movie file must be MP4 and no larger than 1 GB.");
         return;
@@ -232,41 +239,39 @@ export function UploadMovieModal({ isOpen, onClose, onMovieAdded }: UploadMovieM
     } else if (movieSourceMode === "url") {
       const trimmedUrl = movieUrlInput.trim();
       if (!trimmedUrl) {
-        setError("MP4 Video URL is mandatory when 'MP4 URL' option is selected.");
+        setError("Video URL is mandatory when 'Video URL' option is selected.");
         return;
       }
       if (movieFile) {
         setError("Only ONE movie source can be selected. Please clear the uploaded file or choose 'Upload MP4 File'.");
         return;
       }
-      let parsedUrl: URL;
-      try {
-        parsedUrl = new URL(trimmedUrl);
-        if (!["http:", "https:"].includes(parsedUrl.protocol)) {
-          throw new Error("Invalid protocol");
+
+      // Validate Season Number: positive integer only, no decimals, no negative numbers, no zero
+      const trimmedSeason = seasonNumber.trim();
+      if (trimmedSeason) {
+        if (!/^\d+$/.test(trimmedSeason)) {
+          setError("Season Number must be a positive integer (e.g. 1, 2, 3).");
+          return;
         }
-      } catch {
-        setError("Please enter a valid HTTP or HTTPS video URL (e.g. https://example.com/movie.mp4).");
-        return;
+        const parsedSeason = parseInt(trimmedSeason, 10);
+        if (isNaN(parsedSeason) || parsedSeason < 1) {
+          setError("Season Number must be a positive integer (e.g. 1, 2, 3).");
+          return;
+        }
+        finalSeasonNum = parsedSeason;
+      } else {
+        finalSeasonNum = 1;
       }
 
-      // Check for expected MP4 usage
-      const lowerPath = parsedUrl.pathname.toLowerCase();
-      const lowerSearch = parsedUrl.search.toLowerCase();
-      const isLikelyMp4 =
-        lowerPath.endsWith(".mp4") ||
-        lowerPath.includes(".mp4") ||
-        lowerSearch.includes(".mp4") ||
-        lowerPath.includes("video") ||
-        lowerPath.includes("mp4") ||
-        lowerPath.includes("stream");
-
-      if (!isLikelyMp4) {
-        setError("The provided URL does not appear to reference an MP4 video resource. Please ensure it points directly to an MP4 video.");
+      // Parse episodes using parseEpisodeUrls
+      const parsedEpisodes = parseEpisodeUrls(trimmedUrl);
+      if (parsedEpisodes.length === 0) {
+        setError("Please enter at least one valid video URL.");
         return;
       }
     } else {
-      setError("Please select a movie source (Upload MP4 File or MP4 URL).");
+      setError("Please select a movie source (Upload MP4 File or Video URL).");
       return;
     }
 
@@ -296,13 +301,13 @@ export function UploadMovieModal({ isOpen, onClose, onMovieAdded }: UploadMovieM
         });
         setUploadStatusText("Processing/Publishing…");
       } else {
-        // Option B: MP4 URL - stored directly in existing `url` field without file upload
+        // Option B: Video URL (Single Movie or Series)
         setUploadProgress(null);
         setUploadStatusText("Processing/Publishing…");
         finalMovieUrl = movieUrlInput.trim();
       }
 
-      // 3. Save into Firestore `movie` collection with comma-separated genres for complete compatibility
+      // 3. Save into Firestore `movie` collection with season handling
       setUploadStatusText("Saving movie metadata to Firestore...");
       await addMovieToFirestore({
         Title: title.trim(),
@@ -311,7 +316,8 @@ export function UploadMovieModal({ isOpen, onClose, onMovieAdded }: UploadMovieM
         description: description.trim(),
         poster: finalPosterUrl,
         cover: coverUrl.trim() || undefined,
-        url: finalMovieUrl
+        url: finalMovieUrl,
+        seasonNumber: finalSeasonNum
       });
 
       setSuccess(true);
@@ -377,10 +383,10 @@ export function UploadMovieModal({ isOpen, onClose, onMovieAdded }: UploadMovieM
             <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-2.5">
               <div>
                 <label className="text-xs font-semibold uppercase tracking-wider text-rose-400 flex items-center gap-1.5">
-                  <FileVideo className="w-4 h-4" /> Movie Source * (Choose ONE)
+                  <FileVideo className="w-4 h-4" /> Movie / Series Source *
                 </label>
                 <p className="text-[11px] text-neutral-400 mt-0.5">
-                  Provide your movie as an uploaded MP4 file or via a direct MP4 URL
+                  Upload an MP4 file for a Movie, or use Video URLs for Movies & TV Series
                 </p>
               </div>
 
@@ -397,7 +403,7 @@ export function UploadMovieModal({ isOpen, onClose, onMovieAdded }: UploadMovieM
                   }`}
                 >
                   <UploadCloud className="w-3.5 h-3.5" />
-                  <span>Upload MP4 File</span>
+                  <span>Upload MP4 (Movie Only)</span>
                 </button>
                 <button
                   type="button"
@@ -410,15 +416,18 @@ export function UploadMovieModal({ isOpen, onClose, onMovieAdded }: UploadMovieM
                   }`}
                 >
                   <LinkIcon className="w-3.5 h-3.5" />
-                  <span>MP4 URL</span>
+                  <span>Video URL (Movie / Series)</span>
                 </button>
               </div>
             </div>
 
-            {/* OPTION A: Upload MP4 File */}
+            {/* OPTION A: Upload MP4 File (Movies only) */}
             {movieSourceMode === "file" && (
               <div className="space-y-2 pt-1">
-                <span className="text-[11px] text-neutral-400 block">Worker Upload • .mp4 only • Max 1 GB</span>
+                <div className="flex flex-col sm:flex-row sm:items-center justify-between text-[11px] text-neutral-400 gap-1">
+                  <span>Worker Upload • .mp4 only • Max 1 GB</span>
+                  <span className="text-amber-400/90 font-medium">Single Movie only (Season 1)</span>
+                </div>
                 <input
                   ref={movieInputRef}
                   type="file"
@@ -459,46 +468,88 @@ export function UploadMovieModal({ isOpen, onClose, onMovieAdded }: UploadMovieM
                     <UploadCloud className="w-8 h-8 text-neutral-400 mx-auto mb-2" />
                     <p className="text-sm font-medium text-white">Click to select MP4 movie file</p>
                     <p className="text-xs text-neutral-400 mt-1">
-                      Required: File must be .mp4 and no larger than 1 GB
+                      Required: File must be .mp4 and no larger than 1 GB • For TV Series, switch to Video URL
                     </p>
                   </div>
                 )}
               </div>
             )}
 
-            {/* OPTION B: MP4 URL */}
+            {/* OPTION B: Video URL (Movie or Series) */}
             {movieSourceMode === "url" && (
-              <div className="space-y-2 pt-1">
-                <span className="text-[11px] text-neutral-400 block">
-                  Direct Video URL • Direct HTTP/HTTPS link to an MP4 video resource
-                </span>
-                <div className="relative">
-                  <input
-                    type="url"
-                    value={movieUrlInput}
-                    onChange={(e) => {
-                      setMovieUrlInput(e.target.value);
-                      setError(null);
-                    }}
-                    placeholder="https://example.com/videos/movie.mp4"
-                    disabled={isUploading}
-                    className="w-full pl-3.5 pr-10 py-2.5 bg-neutral-900 border border-neutral-700 rounded-xl text-white placeholder-neutral-500 focus:outline-none focus:ring-2 focus:ring-rose-500 text-sm"
-                  />
-                  {movieUrlInput && (
-                    <button
-                      type="button"
-                      onClick={() => setMovieUrlInput("")}
-                      disabled={isUploading}
-                      className="absolute right-3 top-1/2 -translate-y-1/2 text-neutral-400 hover:text-white"
-                      title="Clear URL"
-                    >
-                      <X className="w-4 h-4" />
-                    </button>
-                  )}
+              <div className="space-y-3 pt-1">
+                <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-1 text-[11px] text-neutral-400">
+                  <span>Direct HTTP/HTTPS link to video resource or comma-separated episode URLs</span>
+                  <span className="text-rose-400/90 font-medium">Supports Single Movies & Multi-Episode Series</span>
                 </div>
-                <p className="text-[11px] text-neutral-400">
-                  Remote video URL will be streamed directly in the video player without uploading through the Worker.
-                </p>
+
+                <div className="grid grid-cols-1 sm:grid-cols-4 gap-3">
+                  {/* Optional Season Number */}
+                  <div className="sm:col-span-1">
+                    <label className="block text-xs font-semibold uppercase tracking-wider text-neutral-300 mb-1 flex items-center gap-1">
+                      <Layers className="w-3.5 h-3.5 text-rose-400" />
+                      <span>Season #</span>
+                    </label>
+                    <input
+                      type="number"
+                      min={1}
+                      step={1}
+                      value={seasonNumber}
+                      onChange={(e) => {
+                        setSeasonNumber(e.target.value);
+                        setError(null);
+                      }}
+                      placeholder="1"
+                      disabled={isUploading}
+                      className="w-full px-3 py-2 bg-neutral-900 border border-neutral-700 rounded-xl text-white placeholder-neutral-500 focus:outline-none focus:ring-2 focus:ring-rose-500 text-sm"
+                      title="Optional: Season number (1 for Season 1, 2 for Season 2, etc.). Empty defaults to 1."
+                    />
+                    <span className="text-[10px] text-neutral-500 block mt-1">Empty = Season 1</span>
+                  </div>
+
+                  {/* Video URL(s) */}
+                  <div className="sm:col-span-3">
+                    <label className="block text-xs font-semibold uppercase tracking-wider text-neutral-300 mb-1">
+                      Video URL(s) *
+                    </label>
+                    <div className="relative">
+                      <textarea
+                        rows={2}
+                        value={movieUrlInput}
+                        onChange={(e) => {
+                          setMovieUrlInput(e.target.value);
+                          setError(null);
+                        }}
+                        placeholder="Single Movie: https://example.com/movie.mp4&#10;Series: ep1.mp4, ep2.mp4, ep3.mp4"
+                        disabled={isUploading}
+                        className="w-full pl-3.5 pr-10 py-2 bg-neutral-900 border border-neutral-700 rounded-xl text-white placeholder-neutral-500 focus:outline-none focus:ring-2 focus:ring-rose-500 text-sm resize-none"
+                      />
+                      {movieUrlInput && (
+                        <button
+                          type="button"
+                          onClick={() => setMovieUrlInput("")}
+                          disabled={isUploading}
+                          className="absolute right-3 top-3 text-neutral-400 hover:text-white"
+                          title="Clear URLs"
+                        >
+                          <X className="w-4 h-4" />
+                        </button>
+                      )}
+                    </div>
+                  </div>
+                </div>
+
+                <div className="text-[11px] text-neutral-400 space-y-1 bg-neutral-950/60 p-3 rounded-xl border border-neutral-800">
+                  <p>
+                    <strong className="text-neutral-300">Single Movie:</strong> Enter a single video URL.
+                  </p>
+                  <p>
+                    <strong className="text-neutral-300">TV Series:</strong> Separate episode URLs with commas (e.g. <code className="text-rose-300">ep1.mp4, ep2.mp4, ep3.mp4</code>).
+                  </p>
+                  <p>
+                    <strong className="text-neutral-300">Season Number:</strong> If left empty or set to 1, URLs save to Season 1 (<code className="text-neutral-300">url</code>). Season 2 saves to <code className="text-neutral-300">url2</code>, Season 3 to <code className="text-neutral-300">url3</code>, etc.
+                  </p>
+                </div>
               </div>
             )}
           </div>

@@ -389,7 +389,8 @@ export function subscribeToMovies(callback: (movies: Movie[]) => void, onError?:
     const list: Movie[] = [];
     snap.forEach((doc) => {
       const data = doc.data();
-      list.push({
+      const movieObj: any = {
+        ...data,
         id: doc.id,
         Title: data.Title || data.title || "Untitled Movie",
         title: data.Title || data.title || "Untitled Movie",
@@ -400,7 +401,8 @@ export function subscribeToMovies(callback: (movies: Movie[]) => void, onError?:
         cover: data.cover || undefined,
         url: data.url || "",
         createdAt: data.createdAt
-      });
+      };
+      list.push(movieObj);
     });
     callback(list);
   }, (err) => {
@@ -417,6 +419,8 @@ export async function addMovieToFirestore(movieData: {
   poster: string;
   cover?: string;
   url: string;
+  seasonNumber?: number;
+  [key: string]: any;
 }): Promise<string> {
   const collRef = collection(firestore, "movie");
   const payload: any = {
@@ -425,12 +429,44 @@ export async function addMovieToFirestore(movieData: {
     year: Number(movieData.year),
     description: movieData.description.trim(),
     poster: movieData.poster.trim(),
-    url: movieData.url.trim(),
     createdAt: serverTimestamp()
   };
+
+  const seasonNum =
+    movieData.seasonNumber && movieData.seasonNumber > 0
+      ? Math.floor(movieData.seasonNumber)
+      : 1;
+  const rawUrl = (movieData.url || "").trim();
+
+  if (seasonNum === 1) {
+    payload.url = rawUrl;
+  } else {
+    payload[`url${seasonNum}`] = rawUrl;
+    // Keep standard url field present as empty string or provided default
+    payload.url = (movieData.defaultUrl || "").trim() || "";
+  }
+
+  // Also include any explicit url2, url3 passed in movieData if present and non-empty
+  for (const key of Object.keys(movieData)) {
+    if (/^url\d+$/i.test(key) && key.toLowerCase() !== "url1") {
+      const val = movieData[key];
+      if (typeof val === "string" && val.trim() !== "") {
+        payload[key] = val.trim();
+      }
+    }
+  }
+
   if (movieData.cover && movieData.cover.trim() !== "") {
     payload.cover = movieData.cover.trim();
   }
+
+  // Prevent sending undefined or empty optional fields
+  for (const k of Object.keys(payload)) {
+    if (payload[k] === undefined) {
+      delete payload[k];
+    }
+  }
+
   const docRef = await addDoc(collRef, payload);
   return docRef.id;
 }

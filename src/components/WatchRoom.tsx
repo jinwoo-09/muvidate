@@ -7,6 +7,7 @@ import { getVideoDuration, formatVideoTime } from "../lib/videoUtils";
 import { VideoPlayer } from "./VideoPlayer";
 import { RoomChat } from "./RoomChat";
 import { ChangeMediaModal } from "./ChangeMediaModal";
+import { SeriesStructure, extractSeriesStructure, getEpisodeUrl } from "../lib/seriesUtils";
 import { 
   Copy, 
   Check, 
@@ -69,11 +70,30 @@ export function WatchRoom({ roomCode, initialOfflineFile, onLeaveRoom }: WatchRo
   // Throttled sync updates
   const lastSyncWriteTime = useRef<number>(0);
 
+  // Determine series structure for current room media
+  const roomSeriesStructure = useMemo<SeriesStructure | undefined>(() => {
+    if (!room || room.movieSource === "offline") return undefined;
+    const structure = extractSeriesStructure(room.seriesUrls || room.movieUrl || "");
+    return structure.isSeries ? structure : undefined;
+  }, [room?.movieSource, room?.seriesUrls, room?.movieUrl]);
+
   // Determine video playback source with memoization at top level (unconditional hook execution)
   const effectiveVideoSrc = useMemo(() => {
     if (!room) return "";
-    return room.movieSource === "offline" ? (localVideoUrl || "") : (room.movieUrl || "");
-  }, [room?.movieSource, room?.movieUrl, localVideoUrl]);
+    if (room.movieSource === "offline") {
+      return localVideoUrl || "";
+    }
+    // If room has currentEpisodeUrl, use it; otherwise fallback to movieUrl
+    if (room.currentEpisodeUrl && room.currentEpisodeUrl.trim()) {
+      return room.currentEpisodeUrl;
+    }
+    // If room is detected as series, default to current season and episode
+    if (roomSeriesStructure && roomSeriesStructure.isSeries) {
+      const epUrl = getEpisodeUrl(roomSeriesStructure, room.season || 1, room.episode || 1);
+      if (epUrl) return epUrl;
+    }
+    return room.movieUrl || "";
+  }, [room?.movieSource, room?.movieUrl, room?.currentEpisodeUrl, room?.season, room?.episode, roomSeriesStructure, localVideoUrl]);
 
   const handleOfflineFileSelected = useCallback((file: File) => {
     if (activeObjectUrlRef.current && activeObjectUrlRef.current.startsWith("blob:")) {
@@ -185,7 +205,11 @@ export function WatchRoom({ roomCode, initialOfflineFile, onLeaveRoom }: WatchRo
           prev.offlineFileName === data.offlineFileName &&
           prev.movieCompleted === data.movieCompleted &&
           prev.controlsLocked === data.controlsLocked &&
-          prev.expiresAt === data.expiresAt;
+          prev.expiresAt === data.expiresAt &&
+          prev.season === data.season &&
+          prev.episode === data.episode &&
+          prev.currentEpisodeUrl === data.currentEpisodeUrl &&
+          prev.seriesUrls === data.seriesUrls;
 
         // Compare participants active count
         const prevParticipants = prev.participants || {};
@@ -341,10 +365,47 @@ export function WatchRoom({ roomCode, initialOfflineFile, onLeaveRoom }: WatchRo
     });
   };
 
+  // Series Episode / Season Selection handler with RTDB synchronization
+  const handleSelectEpisode = useCallback((seasonNum: number, episodeNum: number, episodeUrl: string) => {
+    if (!room) return;
+    const canControl = isHost || !room.controlsLocked;
+    if (!canControl) return;
+
+    const roomRef = ref(rtdb, `rooms/${roomCode}`);
+    const now = Date.now();
+    update(roomRef, {
+      season: seasonNum,
+      episode: episodeNum,
+      currentEpisodeUrl: episodeUrl,
+      playbackState: {
+        isPlaying: true,
+        currentTime: 0,
+        lastUpdated: now,
+        updatedBy: user?.uid || "unknown",
+        audioTrackIndex: 0
+      }
+    }).catch(console.error);
+
+    postSystemMessage(`Switched to Season ${seasonNum}, Episode ${episodeNum}`);
+  }, [room, isHost, roomCode, user?.uid, postSystemMessage]);
+
   // Handle movie natural completion
   const handleVideoEnded = useCallback(async () => {
     if (!roomCode) return;
     try {
+      // Auto-advance if this is a series and there is a next episode in this season
+      if (roomSeriesStructure && roomSeriesStructure.isSeries && room) {
+        const currentSeasonNum = room.season || 1;
+        const currentEpNum = room.episode || 1;
+        const currentSeasonData = roomSeriesStructure.seasons.find((s) => s.seasonNumber === currentSeasonNum);
+        const nextEp = currentSeasonData?.episodes.find((ep) => ep.episodeNumber === currentEpNum + 1);
+
+        if (nextEp && isHost) {
+          handleSelectEpisode(currentSeasonNum, nextEp.episodeNumber, nextEp.url);
+          return;
+        }
+      }
+
       // 1. Mark movie as completed
       const roomRef = ref(rtdb, `rooms/${roomCode}`);
       await update(roomRef, {
@@ -358,7 +419,7 @@ export function WatchRoom({ roomCode, initialOfflineFile, onLeaveRoom }: WatchRo
     } catch (err) {
       console.error("Error finalizing completed movie:", err);
     }
-  }, [roomCode]);
+  }, [roomCode, roomSeriesStructure, room, isHost, handleSelectEpisode]);
 
   // Replay movie option for host
   const handleReplayMovie = async () => {
@@ -727,6 +788,10 @@ export function WatchRoom({ roomCode, initialOfflineFile, onLeaveRoom }: WatchRo
                 roomCode={roomCode}
                 currentUserId={user?.uid}
                 isVoiceRecording={isVoiceRecording}
+                seriesStructure={roomSeriesStructure}
+                currentSeason={room.season || 1}
+                currentEpisode={room.episode || 1}
+                onSelectEpisode={handleSelectEpisode}
               />
             ) : (
               <div className="w-full aspect-video bg-neutral-900/90 border border-neutral-800 rounded-2xl flex flex-col items-center justify-center p-6 text-center">
@@ -753,7 +818,14 @@ export function WatchRoom({ roomCode, initialOfflineFile, onLeaveRoom }: WatchRo
                 <Film className="w-4 h-4" />
               </div>
               <div>
-                <p className="font-bold text-white">{room.movieTitle}</p>
+                <div className="flex items-center gap-2 flex-wrap">
+                  <p className="font-bold text-white">{room.movieTitle}</p>
+                  {roomSeriesStructure?.isSeries && (
+                    <span className="px-2 py-0.5 rounded-md bg-rose-500/20 text-rose-300 text-[10px] font-semibold border border-rose-500/30">
+                      S{room.season || 1} : EP{room.episode || 1}
+                    </span>
+                  )}
+                </div>
                 <p className="text-neutral-400 text-[11px]">
                   Hosted by <span className="text-neutral-200">@{room.adminUsername}</span>
                 </p>

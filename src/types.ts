@@ -18,6 +18,9 @@ export interface Movie {
   poster: string;
   cover?: string;
   url: string;
+  url2?: string;
+  url3?: string;
+  [key: string]: any;
   createdAt?: any;
 }
 
@@ -59,6 +62,10 @@ export interface Room {
   movieTitle: string;
   moviePoster?: string;
   movieUrl: string;
+  season?: number;
+  episode?: number;
+  currentEpisodeUrl?: string;
+  seriesUrls?: Record<string, string>;
   offlineFileName?: string;
   offlineDuration?: number;
   playbackState: RoomPlaybackState;

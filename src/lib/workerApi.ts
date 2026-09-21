@@ -33,10 +33,14 @@ export function uploadFileToWorker(
     xhr.open("POST", WORKER_URL, true);
     xhr.setRequestHeader("Accept", "application/json");
 
+    if (onProgress) {
+      onProgress(0);
+    }
+
     if (xhr.upload && onProgress) {
       xhr.upload.onprogress = (event) => {
         if (event.lengthComputable && event.total > 0) {
-          const percent = Math.min(100, Math.round((event.loaded / event.total) * 100));
+          const percent = Math.min(99, Math.round((event.loaded / event.total) * 100));
           onProgress(percent);
         }
       };
@@ -46,8 +50,8 @@ export function uploadFileToWorker(
       if (xhr.status >= 200 && xhr.status < 300) {
         try {
           const result: WorkerResponse = JSON.parse(xhr.responseText);
-          if (!result.success || !result.files || result.files.length === 0) {
-            reject(new Error(result.error || "File upload failed: No file URL returned by Worker API."));
+          if (!result?.success || !result?.files || result.files.length === 0 || !result.files[0]?.url) {
+            reject(new Error(result?.error || "File upload failed: No file URL returned by Worker API."));
             return;
           }
           if (onProgress) {

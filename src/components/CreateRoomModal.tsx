@@ -8,6 +8,7 @@ import {
 import { ref, set } from "firebase/database";
 import { Movie, Room } from "../types";
 import { getVideoDuration, formatVideoTime } from "../lib/videoUtils";
+import { extractSeriesStructure } from "../lib/seriesUtils";
 import { 
   X, 
   Tv, 
@@ -123,6 +124,7 @@ export function CreateRoomModal({
       let movieId = "";
       let offlineFileName = "";
       let offlineDuration: number | undefined = undefined;
+      let foundMovie: Movie | undefined = undefined;
 
       if (sourceType === "firestore") {
         const found = movies.find((m) => m.id === selectedMovieId);
@@ -131,6 +133,7 @@ export function CreateRoomModal({
           setIsCreating(false);
           return;
         }
+        foundMovie = found;
         movieId = found.id;
         movieTitle = found.Title;
         moviePoster = (found.cover && found.cover.trim() !== "") ? found.cover : (found.poster || "");
@@ -206,6 +209,30 @@ export function CreateRoomModal({
         }
         if (typeof offlineDuration === "number" && Number.isFinite(offlineDuration) && offlineDuration > 0) {
           roomData.offlineDuration = offlineDuration;
+        }
+      }
+
+      // Check if media is a TV series and populate initial season/episode
+      const detectedSeries =
+        sourceType === "firestore" && foundMovie
+          ? extractSeriesStructure(foundMovie)
+          : sourceType === "direct"
+          ? extractSeriesStructure(directUrl.trim())
+          : null;
+
+      if (detectedSeries && detectedSeries.isSeries) {
+        roomData.season = 1;
+        roomData.episode = 1;
+        roomData.currentEpisodeUrl = detectedSeries.seasons[0]?.episodes[0]?.url || movieUrl;
+        if (sourceType === "firestore" && foundMovie) {
+          // Copy all season URLs
+          for (const k of Object.keys(foundMovie)) {
+            if (/^url\d*$/i.test(k) && typeof (foundMovie as any)[k] === "string" && (foundMovie as any)[k].trim()) {
+              roomData[k] = (foundMovie as any)[k].trim();
+            }
+          }
+        } else if (sourceType === "direct") {
+          roomData.seriesUrls = directUrl.trim();
         }
       }
 

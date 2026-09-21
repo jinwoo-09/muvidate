@@ -4,6 +4,7 @@ import { rtdb, subscribeToMovies } from "../lib/firebase";
 import { ref, update } from "firebase/database";
 import { Movie } from "../types";
 import { getVideoDuration } from "../lib/videoUtils";
+import { extractSeriesStructure } from "../lib/seriesUtils";
 import { 
   X, 
   Film, 
@@ -234,6 +235,36 @@ export function ChangeMediaModal({
       } else {
         updateData.offlineFileName = null;
         updateData.offlineDuration = null;
+      }
+
+      // Check if media is a TV series
+      let seriesStructure = null;
+      if (activeSourceTab === "search") {
+        const found = movies.find((m) => m.id === selectedMovieId);
+        if (found) {
+          seriesStructure = extractSeriesStructure(found);
+          if (seriesStructure.isSeries) {
+            for (const k of Object.keys(found)) {
+              if (/^url\d*$/i.test(k) && typeof (found as any)[k] === "string" && (found as any)[k].trim()) {
+                updateData[k] = (found as any)[k].trim();
+              }
+            }
+          }
+        }
+      } else if (activeSourceTab === "direct") {
+        seriesStructure = extractSeriesStructure(directUrl.trim());
+      }
+
+      if (seriesStructure && seriesStructure.isSeries) {
+        updateData.season = 1;
+        updateData.episode = 1;
+        updateData.currentEpisodeUrl = seriesStructure.seasons[0]?.episodes[0]?.url || movieUrl;
+        updateData.seriesUrls = activeSourceTab === "direct" ? directUrl.trim() : movieUrl;
+      } else {
+        updateData.season = null;
+        updateData.episode = null;
+        updateData.currentEpisodeUrl = null;
+        updateData.seriesUrls = null;
       }
 
       await update(roomRef, updateData);
