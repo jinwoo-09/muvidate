@@ -13,7 +13,8 @@ import {
   Radio, 
   Loader2, 
   AlertCircle,
-  Headphones
+  Headphones,
+  Crop
 } from "lucide-react";
 import { rtdb } from "../lib/firebase";
 import { ref, onChildAdded, off, get } from "firebase/database";
@@ -939,15 +940,64 @@ function VideoPlayerComponent({
         </div>
       )}
 
-      {/* Centered Large Play/Pause Animation Overlay (only visible to controllers when paused) */}
-      <div
-        className={`absolute inset-0 z-10 flex items-center justify-center pointer-events-none transition-opacity duration-300 ${
-          showControls && !isPlaying && canControl ? "opacity-100" : "opacity-0"
-        }`}
-      >
-        <div className="w-16 h-16 sm:w-20 sm:h-20 rounded-full bg-rose-600/90 text-white flex items-center justify-center shadow-2xl backdrop-blur-md transform scale-100 transition-transform">
-          <Play className="w-8 h-8 sm:w-10 sm:h-10 fill-white ml-1" />
-        </div>
+      {/* Centered Large YouTube-Style Controls (only visible to controllers when showControls or paused) */}
+      <div className="absolute inset-0 z-10 flex items-center justify-center gap-6 sm:gap-10 pointer-events-none transition-opacity duration-300">
+        {/* Left: 10s Back */}
+        <button
+          onClick={(e) => {
+            e.stopPropagation();
+            if (!canControl) return;
+            seekRelative(-10);
+            resetControlsTimeout();
+          }}
+          disabled={!canControl}
+          className={`w-14 h-14 sm:w-16 sm:h-16 rounded-full bg-neutral-900/85 text-white flex flex-col items-center justify-center border border-neutral-750 shadow-xl transition pointer-events-auto relative ${
+            canControl ? "hover:bg-rose-600 hover:border-rose-500 cursor-pointer" : "opacity-40 cursor-not-allowed text-neutral-400"
+          } ${showControls ? "opacity-100 scale-100" : "opacity-0 scale-90 pointer-events-none"}`}
+          title={!canControl ? "Playback controls locked by host" : "Skip backward 10s"}
+        >
+          <RotateCcw className="w-5 h-5 sm:w-6 sm:h-6 mb-1" />
+          <span className="text-[9px] font-bold absolute bottom-2">10</span>
+        </button>
+
+        {/* Center: Play/Pause */}
+        <button
+          onClick={(e) => {
+            e.stopPropagation();
+            if (!canControl) return;
+            togglePlayPause();
+            resetControlsTimeout();
+          }}
+          disabled={!canControl}
+          className={`w-18 h-18 sm:w-20 sm:h-20 rounded-full bg-rose-600/90 text-white flex items-center justify-center shadow-2xl backdrop-blur-md transition pointer-events-auto relative ${
+            canControl ? "hover:bg-rose-500 cursor-pointer" : "opacity-40 cursor-not-allowed text-neutral-400"
+          } ${showControls || !isPlaying ? "opacity-100 scale-100" : "opacity-0 scale-90 pointer-events-none"}`}
+          title={!canControl ? "Playback controls locked by host" : (isPlaying ? "Pause (Space)" : "Play (Space)")}
+        >
+          {isPlaying ? (
+            <Pause className="w-7 h-7 sm:w-9 sm:h-9 fill-white" />
+          ) : (
+            <Play className="w-7 h-7 sm:w-9 sm:h-9 fill-white ml-1" />
+          )}
+        </button>
+
+        {/* Right: 10s Forward */}
+        <button
+          onClick={(e) => {
+            e.stopPropagation();
+            if (!canControl) return;
+            seekRelative(10);
+            resetControlsTimeout();
+          }}
+          disabled={!canControl}
+          className={`w-14 h-14 sm:w-16 sm:h-16 rounded-full bg-neutral-900/85 text-white flex flex-col items-center justify-center border border-neutral-750 shadow-xl transition pointer-events-auto relative ${
+            canControl ? "hover:bg-rose-600 hover:border-rose-500 cursor-pointer" : "opacity-40 cursor-not-allowed text-neutral-400"
+          } ${showControls ? "opacity-100 scale-100" : "opacity-0 scale-90 pointer-events-none"}`}
+          title={!canControl ? "Playback controls locked by host" : "Skip forward 10s"}
+        >
+          <RotateCw className="w-5 h-5 sm:w-6 sm:h-6 mb-1" />
+          <span className="text-[9px] font-bold absolute bottom-2">10</span>
+        </button>
       </div>
 
       {/* Video Controls Bar Overlay */}
@@ -1014,38 +1064,6 @@ function VideoPlayerComponent({
               title={!canControl ? "Playback controls locked by host" : (isPlaying ? "Pause (Space)" : "Play (Space)")}
             >
               {isPlaying ? <Pause className="w-5 h-5 fill-current" /> : <Play className="w-5 h-5 fill-current ml-0.5" />}
-            </button>
-
-            <button
-              onClick={(e) => {
-                e.stopPropagation();
-                if (!canControl) return;
-                seekRelative(-10);
-                resetControlsTimeout();
-              }}
-              disabled={!canControl}
-              className={`p-1.5 rounded-lg transition ${
-                canControl ? "hover:bg-white/15 cursor-pointer text-white" : "opacity-40 cursor-not-allowed text-neutral-400"
-              }`}
-              title={!canControl ? "Playback controls locked by host" : "Skip backward 10s (Left Arrow)"}
-            >
-              <RotateCcw className="w-4 h-4" />
-            </button>
-
-            <button
-              onClick={(e) => {
-                e.stopPropagation();
-                if (!canControl) return;
-                seekRelative(10);
-                resetControlsTimeout();
-              }}
-              disabled={!canControl}
-              className={`p-1.5 rounded-lg transition ${
-                canControl ? "hover:bg-white/15 cursor-pointer text-white" : "opacity-40 cursor-not-allowed text-neutral-400"
-              }`}
-              title={!canControl ? "Playback controls locked by host" : "Skip forward 10s (Right Arrow)"}
-            >
-              <RotateCw className="w-4 h-4" />
             </button>
 
             {/* Volume */}
@@ -1143,12 +1161,13 @@ function VideoPlayerComponent({
                   setShowAudioMenu(false);
                   resetControlsTimeout();
                 }}
-                className={`px-2 py-1 rounded-lg transition text-xs font-semibold uppercase tracking-wider flex items-center gap-1 ${
+                className={`p-1.5 rounded-lg transition flex items-center justify-center text-xs ${
                   showDisplayMenu ? "bg-rose-600 text-white" : "hover:bg-white/15 text-neutral-300 hover:text-white"
                 }`}
-                title="Change display scale mode"
+                aria-label={`Change display scale mode (Current: ${displayMode})`}
+                title={`Display Scale: ${displayMode}`}
               >
-                <span>Scale: {displayMode}</span>
+                <Crop className="w-4 h-4" />
               </button>
               {showDisplayMenu && (
                 <div

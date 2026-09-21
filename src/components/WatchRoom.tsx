@@ -777,7 +777,7 @@ export function WatchRoom({ roomCode, initialOfflineFile, onLeaveRoom }: WatchRo
         </div>
 
         {/* Chat & Participants Column */}
-        <div className="lg:col-span-4 flex flex-col h-[520px] lg:h-auto min-h-[480px]">
+        <div className="lg:col-span-4 flex flex-col h-[520px] lg:h-[550px] lg:max-h-[70vh] min-h-[480px]">
           {/* Tabs for Mobile/Desktop */}
           <div className="flex items-center gap-1 p-1 bg-neutral-950 rounded-xl border border-neutral-800 mb-2">
             <button
