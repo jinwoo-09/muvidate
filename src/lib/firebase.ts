@@ -364,6 +364,53 @@ export async function getDailyRoomCount(uid: string): Promise<number> {
   return snap.exists() ? (snap.val().count || 0) : 0;
 }
 
+// Track in-flight daily room limits cleanup to prevent duplicate executions
+let dailyLimitsCleanupRan = false;
+
+/**
+ * Scan the dailyRoomLimits node in Firebase RTDB on startup.
+ * Deletes any historical entries whose date is NOT today's date (using getTodayDateKey()).
+ */
+export async function cleanupExpiredDailyRoomLimits(): Promise<void> {
+  if (dailyLimitsCleanupRan) return;
+  dailyLimitsCleanupRan = true;
+
+  try {
+    const today = getTodayDateKey();
+    const dailyLimitsRef = ref(rtdb, "dailyRoomLimits");
+    const snap = await get(dailyLimitsRef);
+
+    if (!snap.exists()) return;
+    const data = snap.val();
+    if (!data || typeof data !== "object") return;
+
+    const deletionPromises: Promise<void>[] = [];
+
+    for (const [key, value] of Object.entries(data)) {
+      if (!key) continue;
+
+      // Case 1: Direct date entry under dailyRoomLimits (e.g. dailyRoomLimits/{date})
+      if (key !== today && (key.match(/^\d{4}-\d{2}-\d{2}/) || (value && typeof value === "object" && ("count" in value || "lastCreated" in value)))) {
+        deletionPromises.push(remove(ref(rtdb, `dailyRoomLimits/${key}`)).catch(() => {}));
+      } 
+      // Case 2: Nested under user UID (e.g. dailyRoomLimits/{uid}/{date})
+      else if (value && typeof value === "object") {
+        for (const [subKey] of Object.entries(value)) {
+          if (subKey && subKey !== today) {
+            deletionPromises.push(remove(ref(rtdb, `dailyRoomLimits/${key}/${subKey}`)).catch(() => {}));
+          }
+        }
+      }
+    }
+
+    if (deletionPromises.length > 0) {
+      await Promise.allSettled(deletionPromises);
+    }
+  } catch (err) {
+    console.warn("cleanupExpiredDailyRoomLimits error:", err);
+  }
+}
+
 // --- 4-Digit Room Code Generator & Expired Room Cleanup ---
 
 // Set to track in-flight room deletions to prevent concurrent duplicate delete operations
