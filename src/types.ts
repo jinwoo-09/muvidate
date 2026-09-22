@@ -20,6 +20,8 @@ export interface Movie {
   url: string;
   url2?: string;
   url3?: string;
+  subtitle?: string;
+  trailer?: string;
   [key: string]: any;
   createdAt?: any;
 }
@@ -65,6 +67,7 @@ export interface Room {
   season?: number;
   episode?: number;
   currentEpisodeUrl?: string;
+  subtitle?: string;
   seriesUrls?: Record<string, string>;
   offlineFileName?: string;
   offlineDuration?: number;

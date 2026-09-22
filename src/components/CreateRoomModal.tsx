@@ -203,6 +203,9 @@ export function CreateRoomModal({
       if (moviePoster) {
         roomData.moviePoster = moviePoster;
       }
+      if (foundMovie && foundMovie.subtitle && foundMovie.subtitle.trim()) {
+        roomData.subtitle = foundMovie.subtitle.trim();
+      }
       if (sourceType === "offline") {
         if (offlineFileName) {
           roomData.offlineFileName = offlineFileName;

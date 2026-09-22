@@ -93,6 +93,7 @@ function MainContent() {
   const [isProfileOpen, setIsProfileOpen] = useState(false);
   const [selectedMovieForDetail, setSelectedMovieForDetail] = useState<Movie | null>(null);
   const [preselectedMovieForRoom, setPreselectedMovieForRoom] = useState<Movie | null>(null);
+  const [movieToEdit, setMovieToEdit] = useState<Movie | null>(null);
 
   // Parse room code from URL if present (e.g. ?room=1234 or #1234)
   useEffect(() => {
@@ -239,7 +240,11 @@ function MainContent() {
       {/* Upload Movie Modal */}
       <UploadMovieModal
         isOpen={isUploadMovieOpen}
-        onClose={() => setIsUploadMovieOpen(false)}
+        onClose={() => {
+          setIsUploadMovieOpen(false);
+          setMovieToEdit(null);
+        }}
+        movieToEdit={movieToEdit}
       />
 
       {/* Create Room Modal */}
@@ -266,6 +271,10 @@ function MainContent() {
         movie={selectedMovieForDetail}
         onClose={() => setSelectedMovieForDetail(null)}
         onCreateRoom={(m) => handleStartCreateRoom(m)}
+        onEditMovie={(m) => {
+          setMovieToEdit(m);
+          setIsUploadMovieOpen(true);
+        }}
       />
 
       {/* Top Navbar */}
@@ -274,7 +283,10 @@ function MainContent() {
         onSearchChange={setSearchQuery}
         onCreateRoomClick={() => handleStartCreateRoom()}
         onJoinRoomClick={() => setIsJoinRoomOpen(true)}
-        onUploadMovieClick={() => setIsUploadMovieOpen(true)}
+        onUploadMovieClick={() => {
+          setMovieToEdit(null);
+          setIsUploadMovieOpen(true);
+        }}
         onProfileClick={() => setIsProfileOpen(true)}
       />
 

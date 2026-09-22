@@ -792,6 +792,7 @@ export function WatchRoom({ roomCode, initialOfflineFile, onLeaveRoom }: WatchRo
                 currentSeason={room.season || 1}
                 currentEpisode={room.episode || 1}
                 onSelectEpisode={handleSelectEpisode}
+                subtitle={room.subtitle}
               />
             ) : (
               <div className="w-full aspect-video bg-neutral-900/90 border border-neutral-800 rounded-2xl flex flex-col items-center justify-center p-6 text-center">

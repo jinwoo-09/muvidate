@@ -221,6 +221,17 @@ export function ChangeMediaModal({
         updateData.moviePoster = null;
       }
 
+      if (activeSourceTab === "search") {
+        const found = movies.find((m) => m.id === selectedMovieId);
+        if (found && found.subtitle && found.subtitle.trim()) {
+          updateData.subtitle = found.subtitle.trim();
+        } else {
+          updateData.subtitle = null;
+        }
+      } else {
+        updateData.subtitle = null;
+      }
+
       if (movieSource === "offline") {
         if (offlineFileName) {
           updateData.offlineFileName = offlineFileName;

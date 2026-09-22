@@ -47,8 +47,9 @@ export function MovieCard({
         </div>
 
         {/* Hover overlay with action buttons */}
-        <div className="absolute inset-0 bg-gradient-to-t from-neutral-950 via-neutral-950/60 to-transparent opacity-0 group-hover:opacity-100 transition-opacity duration-200 flex flex-col justify-end p-3.5 gap-2">
+        <div className="absolute inset-0 bg-gradient-to-t from-neutral-950 via-neutral-950/60 to-transparent opacity-0 group-hover:opacity-100 transition-opacity duration-200 pointer-events-none group-hover:pointer-events-auto flex flex-col justify-end p-3.5 gap-2">
           <button
+            type="button"
             onClick={(e) => {
               e.stopPropagation();
               onCreateRoom(movie);
@@ -61,6 +62,7 @@ export function MovieCard({
 
           <div className="grid grid-cols-2 gap-1.5">
             <button
+              type="button"
               onClick={(e) => {
                 e.stopPropagation();
                 onWatchAlone(movie);
@@ -72,6 +74,7 @@ export function MovieCard({
             </button>
 
             <button
+              type="button"
               onClick={(e) => {
                 e.stopPropagation();
                 onViewDetails(movie);

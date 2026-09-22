@@ -19,6 +19,7 @@ import {
   setDoc, 
   updateDoc, 
   deleteDoc,
+  deleteField,
   collection, 
   query, 
   where, 
@@ -399,6 +400,8 @@ export function subscribeToMovies(callback: (movies: Movie[]) => void, onError?:
         description: data.description || "",
         poster: data.poster || "",
         cover: data.cover || undefined,
+        subtitle: data.subtitle || undefined,
+        trailer: data.trailer || undefined,
         url: data.url || "",
         createdAt: data.createdAt
       };
@@ -418,6 +421,8 @@ export async function addMovieToFirestore(movieData: {
   description: string;
   poster: string;
   cover?: string;
+  subtitle?: string;
+  trailer?: string;
   url: string;
   seasonNumber?: number;
   [key: string]: any;
@@ -426,7 +431,7 @@ export async function addMovieToFirestore(movieData: {
   const payload: any = {
     Title: movieData.Title.trim(),
     genre: movieData.genre.trim(),
-    year: Number(movieData.year),
+    year: Number(movieData.year) || new Date().getFullYear(),
     description: movieData.description.trim(),
     poster: movieData.poster.trim(),
     createdAt: serverTimestamp()
@@ -442,8 +447,10 @@ export async function addMovieToFirestore(movieData: {
     payload.url = rawUrl;
   } else {
     payload[`url${seasonNum}`] = rawUrl;
-    // Keep standard url field present as empty string or provided default
-    payload.url = (movieData.defaultUrl || "").trim() || "";
+    // Keep standard url field present as provided default or empty
+    if (movieData.defaultUrl && typeof movieData.defaultUrl === "string") {
+      payload.url = movieData.defaultUrl.trim();
+    }
   }
 
   // Also include any explicit url2, url3 passed in movieData if present and non-empty
@@ -460,6 +467,14 @@ export async function addMovieToFirestore(movieData: {
     payload.cover = movieData.cover.trim();
   }
 
+  if (movieData.subtitle && movieData.subtitle.trim() !== "") {
+    payload.subtitle = movieData.subtitle.trim();
+  }
+
+  if (movieData.trailer && movieData.trailer.trim() !== "") {
+    payload.trailer = movieData.trailer.trim();
+  }
+
   // Prevent sending undefined or empty optional fields
   for (const k of Object.keys(payload)) {
     if (payload[k] === undefined) {
@@ -469,4 +484,111 @@ export async function addMovieToFirestore(movieData: {
 
   const docRef = await addDoc(collRef, payload);
   return docRef.id;
+}
+
+export async function updateMovieInFirestore(
+  movieId: string,
+  movieData: {
+    Title?: string;
+    genre?: string;
+    year?: number;
+    description?: string;
+    poster?: string;
+    cover?: string | null;
+    subtitle?: string | null;
+    trailer?: string | null;
+    url?: string;
+    seasonNumber?: number;
+    [key: string]: any;
+  }
+): Promise<void> {
+  if (!movieId) throw new Error("Movie ID is required for update.");
+  const docRef = doc(firestore, "movie", movieId);
+  const payload: any = {
+    updatedAt: serverTimestamp()
+  };
+
+  if (movieData.Title !== undefined) {
+    payload.Title = movieData.Title.trim();
+  }
+  if (movieData.genre !== undefined) {
+    payload.genre = movieData.genre.trim();
+  }
+  if (movieData.year !== undefined) {
+    const y = Number(movieData.year);
+    if (!isNaN(y) && y > 0) {
+      payload.year = y;
+    }
+  }
+  if (movieData.description !== undefined) {
+    payload.description = movieData.description.trim();
+  }
+  if (movieData.poster !== undefined && movieData.poster.trim() !== "") {
+    payload.poster = movieData.poster.trim();
+  }
+
+  // Cover URL
+  if (movieData.cover !== undefined) {
+    if (movieData.cover && movieData.cover.trim() !== "") {
+      payload.cover = movieData.cover.trim();
+    } else {
+      payload.cover = deleteField();
+    }
+  }
+
+  // Subtitle URL(s)
+  if (movieData.subtitle !== undefined) {
+    if (movieData.subtitle && movieData.subtitle.trim() !== "") {
+      payload.subtitle = movieData.subtitle.trim();
+    } else {
+      payload.subtitle = deleteField();
+    }
+  }
+
+  // Trailer URL
+  if (movieData.trailer !== undefined) {
+    if (movieData.trailer && movieData.trailer.trim() !== "") {
+      payload.trailer = movieData.trailer.trim();
+    } else {
+      payload.trailer = deleteField();
+    }
+  }
+
+  // Media URLs & Seasons
+  if (movieData.url !== undefined) {
+    const rawUrl = movieData.url.trim();
+    const seasonNum =
+      movieData.seasonNumber && movieData.seasonNumber > 0
+        ? Math.floor(movieData.seasonNumber)
+        : 1;
+
+    if (seasonNum === 1) {
+      payload.url = rawUrl;
+    } else {
+      payload[`url${seasonNum}`] = rawUrl;
+    }
+  }
+
+  // Extra season URLs (url2, url3, etc.)
+  for (const key of Object.keys(movieData)) {
+    if (/^url\d+$/i.test(key) && key.toLowerCase() !== "url1") {
+      const val = movieData[key];
+      if (typeof val === "string") {
+        if (val.trim() !== "") {
+          payload[key] = val.trim();
+        } else {
+          payload[key] = deleteField();
+        }
+      }
+    }
+  }
+
+  // Sanitize: ensure no undefined fields
+  for (const k of Object.keys(payload)) {
+    if (payload[k] === undefined) {
+      delete payload[k];
+    }
+  }
+
+  await updateDoc(docRef, payload);
 }

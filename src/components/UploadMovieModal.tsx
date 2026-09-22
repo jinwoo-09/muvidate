@@ -1,8 +1,9 @@
 import React, { useState, useRef, useEffect } from "react";
 import { useAuth } from "../context/AuthContext";
 import { uploadFileToWorker } from "../lib/workerApi";
-import { addMovieToFirestore } from "../lib/firebase";
+import { addMovieToFirestore, updateMovieInFirestore } from "../lib/firebase";
 import { parseEpisodeUrls } from "../lib/seriesUtils";
+import { Movie } from "../types";
 import { 
   X, 
   UploadCloud, 
@@ -16,13 +17,17 @@ import {
   Check,
   Search,
   Link as LinkIcon,
-  Layers
+  Layers,
+  Subtitles,
+  Pencil,
+  Clapperboard
 } from "lucide-react";
 
 interface UploadMovieModalProps {
   isOpen: boolean;
   onClose: () => void;
   onMovieAdded?: () => void;
+  movieToEdit?: Movie | null;
 }
 
 const PREDEFINED_GENRES = [
@@ -55,8 +60,15 @@ const PREDEFINED_GENRES = [
 
 const MAX_MOVIE_SIZE = 1024 * 1024 * 1024; // 1 GB in bytes
 
-export function UploadMovieModal({ isOpen, onClose, onMovieAdded }: UploadMovieModalProps) {
+export function UploadMovieModal({
+  isOpen,
+  onClose,
+  onMovieAdded,
+  movieToEdit
+}: UploadMovieModalProps) {
   const { profile } = useAuth();
+  const isEditMode = !!movieToEdit;
+
   const [title, setTitle] = useState("");
   const [selectedGenres, setSelectedGenres] = useState<string[]>([]);
   const [isGenreDropdownOpen, setIsGenreDropdownOpen] = useState(false);
@@ -66,6 +78,8 @@ export function UploadMovieModal({ isOpen, onClose, onMovieAdded }: UploadMovieM
   const [posterMode, setPosterMode] = useState<"upload" | "url">("upload");
   const [posterUrl, setPosterUrl] = useState("");
   const [coverUrl, setCoverUrl] = useState("");
+  const [subtitle, setSubtitle] = useState("");
+  const [trailer, setTrailer] = useState("");
   const [posterFile, setPosterFile] = useState<File | null>(null);
   const [movieSourceMode, setMovieSourceMode] = useState<"file" | "url">("file");
   const [movieFile, setMovieFile] = useState<File | null>(null);
@@ -81,6 +95,54 @@ export function UploadMovieModal({ isOpen, onClose, onMovieAdded }: UploadMovieM
   const movieInputRef = useRef<HTMLInputElement>(null);
   const posterInputRef = useRef<HTMLInputElement>(null);
   const genreDropdownRef = useRef<HTMLDivElement>(null);
+
+  // Sync state when modal opens or movieToEdit changes
+  useEffect(() => {
+    if (!isOpen) {
+      setError(null);
+      setSuccess(false);
+      return;
+    }
+
+    if (movieToEdit) {
+      setTitle(movieToEdit.Title || movieToEdit.title || "");
+      const genres = movieToEdit.genre
+        ? movieToEdit.genre.split(",").map((g) => g.trim()).filter(Boolean)
+        : [];
+      setSelectedGenres(genres);
+      setYear(movieToEdit.year ? movieToEdit.year.toString() : new Date().getFullYear().toString());
+      setDescription(movieToEdit.description || "");
+      setPosterMode("url");
+      setPosterUrl(movieToEdit.poster || "");
+      setPosterFile(null);
+      setCoverUrl(movieToEdit.cover || "");
+      setSubtitle(movieToEdit.subtitle || "");
+      setTrailer(movieToEdit.trailer || "");
+      setMovieSourceMode("url");
+      setMovieFile(null);
+      setMovieUrlInput(movieToEdit.url || "");
+      setSeasonNumber(movieToEdit.seasonNumber ? movieToEdit.seasonNumber.toString() : "");
+      setError(null);
+      setSuccess(false);
+    } else {
+      setTitle("");
+      setSelectedGenres([]);
+      setYear(new Date().getFullYear().toString());
+      setDescription("");
+      setPosterMode("upload");
+      setPosterUrl("");
+      setPosterFile(null);
+      setCoverUrl("");
+      setSubtitle("");
+      setTrailer("");
+      setMovieSourceMode("file");
+      setMovieFile(null);
+      setMovieUrlInput("");
+      setSeasonNumber("");
+      setError(null);
+      setSuccess(false);
+    }
+  }, [isOpen, movieToEdit]);
 
   // Close genre dropdown when clicking outside
   useEffect(() => {
@@ -114,11 +176,11 @@ export function UploadMovieModal({ isOpen, onClose, onMovieAdded }: UploadMovieM
     setMovieSourceMode(mode);
     setError(null);
     if (mode === "file") {
-      // Switching to file clears URL and resets season number (file is for single movie only)
-      setMovieUrlInput("");
-      setSeasonNumber("");
+      if (!isEditMode) {
+        setMovieUrlInput("");
+        setSeasonNumber("");
+      }
     } else {
-      // Switching to URL clears file to avoid ambiguity
       setMovieFile(null);
       if (movieInputRef.current) movieInputRef.current.value = "";
     }
@@ -128,7 +190,6 @@ export function UploadMovieModal({ isOpen, onClose, onMovieAdded }: UploadMovieM
     const file = e.target.files?.[0];
     if (!file) return;
 
-    // Validate MP4 requirement and 1 GB size limit strictly
     const isMp4Name = file.name.toLowerCase().endsWith(".mp4");
     const isMp4Type = file.type === "video/mp4" || file.type === "";
 
@@ -159,7 +220,6 @@ export function UploadMovieModal({ isOpen, onClose, onMovieAdded }: UploadMovieM
       return;
     }
 
-    // Validate the actual image dimensions after selection: height must be greater than width (portrait)
     const img = new Image();
     const objectUrl = URL.createObjectURL(file);
     img.onload = () => {
@@ -184,14 +244,16 @@ export function UploadMovieModal({ isOpen, onClose, onMovieAdded }: UploadMovieM
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
+    if (isUploading) return;
     setError(null);
 
+    // Verify subscription
     if (profile?.subscription !== "premium") {
-      setError("Only premium members can upload movies to Firestore.");
+      setError("Only verified Premium subscribers have permission to save titles.");
       return;
     }
 
-    // Mandatory field check
+    // Validation
     if (!title.trim()) {
       setError("Movie Title is mandatory.");
       return;
@@ -209,32 +271,28 @@ export function UploadMovieModal({ isOpen, onClose, onMovieAdded }: UploadMovieM
       setError("Description is mandatory.");
       return;
     }
-    if (posterMode === "upload" && !posterFile) {
+    if (posterMode === "upload" && !posterFile && !isEditMode) {
       setError("Poster image file is mandatory.");
       return;
     }
-    if (posterMode === "url" && !posterUrl.trim()) {
+    if (posterMode === "url" && !posterUrl.trim() && !isEditMode) {
       setError("Poster URL is mandatory.");
       return;
     }
 
-    // Validate movie source: Exactly ONE must be supplied
+    // Source validation
     let finalSeasonNum = 1;
-
     if (movieSourceMode === "file") {
       finalSeasonNum = 1;
-      if (!movieFile) {
+      if (!movieFile && !isEditMode) {
         setError("MP4 Video file is mandatory when 'Upload MP4 File' is selected.");
         return;
       }
-      if (movieUrlInput.trim()) {
-        setError("Only ONE movie source can be selected. Please clear the URL or choose 'Video URL'.");
-        return;
-      }
-      // MP4 File upload is allowed ONLY for normal single movie (Season 1)
-      if (!movieFile.name.toLowerCase().endsWith(".mp4") || movieFile.size > MAX_MOVIE_SIZE) {
-        setError("Movie file must be MP4 and no larger than 1 GB.");
-        return;
+      if (movieFile) {
+        if (!movieFile.name.toLowerCase().endsWith(".mp4") || movieFile.size > MAX_MOVIE_SIZE) {
+          setError("Movie file must be MP4 and no larger than 1 GB.");
+          return;
+        }
       }
     } else if (movieSourceMode === "url") {
       const trimmedUrl = movieUrlInput.trim();
@@ -242,12 +300,7 @@ export function UploadMovieModal({ isOpen, onClose, onMovieAdded }: UploadMovieM
         setError("Video URL is mandatory when 'Video URL' option is selected.");
         return;
       }
-      if (movieFile) {
-        setError("Only ONE movie source can be selected. Please clear the uploaded file or choose 'Upload MP4 File'.");
-        return;
-      }
 
-      // Validate Season Number: positive integer only, no decimals, no negative numbers, no zero
       const trimmedSeason = seasonNumber.trim();
       if (trimmedSeason) {
         if (!/^\d+$/.test(trimmedSeason)) {
@@ -264,70 +317,92 @@ export function UploadMovieModal({ isOpen, onClose, onMovieAdded }: UploadMovieM
         finalSeasonNum = 1;
       }
 
-      // Parse episodes using parseEpisodeUrls
       const parsedEpisodes = parseEpisodeUrls(trimmedUrl);
       if (parsedEpisodes.length === 0) {
         setError("Please enter at least one valid video URL.");
         return;
       }
     } else {
-      setError("Please select a movie source (Upload MP4 File or Video URL).");
+      setError("Please select a movie source.");
       return;
     }
 
     setIsUploading(true);
     setUploadProgress(null);
     setUploadStatusText("");
+
     try {
-      // 1. Upload Poster if file provided
+      // 1. Upload Poster if new file provided
       let finalPosterUrl = posterUrl.trim();
       if (posterMode === "upload" && posterFile) {
         setUploadStatusText("Uploading portrait poster...");
         finalPosterUrl = await uploadFileToWorker(posterFile, posterFile.name);
+      } else if (!finalPosterUrl && isEditMode && movieToEdit.poster) {
+        finalPosterUrl = movieToEdit.poster;
       }
 
-      // 2. Obtain Movie URL (Worker upload for file, or direct URL)
+      // 2. Video source resolution
       let finalMovieUrl = "";
       if (movieSourceMode === "file") {
-        setUploadProgress(0);
-        setUploadStatusText("Uploading… 0%");
-        finalMovieUrl = await uploadFileToWorker(movieFile!, movieFile!.name, (percent) => {
-          setUploadProgress(percent);
-          if (percent < 100) {
-            setUploadStatusText(`Uploading… ${percent}%`);
-          } else {
-            setUploadStatusText("Processing/Publishing…");
-          }
-        });
-        setUploadStatusText("Processing/Publishing…");
+        if (movieFile) {
+          setUploadProgress(0);
+          setUploadStatusText("Uploading… 0%");
+          finalMovieUrl = await uploadFileToWorker(movieFile, movieFile.name, (percent) => {
+            setUploadProgress(percent);
+            if (percent < 100) {
+              setUploadStatusText(`Uploading… ${percent}%`);
+            } else {
+              setUploadStatusText("Processing/Publishing…");
+            }
+          });
+          setUploadStatusText("Processing/Publishing…");
+        } else if (isEditMode && movieToEdit.url) {
+          finalMovieUrl = movieToEdit.url;
+        }
       } else {
-        // Option B: Video URL (Single Movie or Series)
         setUploadProgress(null);
         setUploadStatusText("Processing/Publishing…");
         finalMovieUrl = movieUrlInput.trim();
       }
 
-      // 3. Save into Firestore `movie` collection with season handling
-      setUploadStatusText("Saving movie metadata to Firestore...");
-      await addMovieToFirestore({
-        Title: title.trim(),
-        genre: selectedGenres.join(", "),
-        year: yearNum,
-        description: description.trim(),
-        poster: finalPosterUrl,
-        cover: coverUrl.trim() || undefined,
-        url: finalMovieUrl,
-        seasonNumber: finalSeasonNum
-      });
+      if (isEditMode && movieToEdit) {
+        setUploadStatusText("Saving movie updates to Firestore...");
+        await updateMovieInFirestore(movieToEdit.id, {
+          Title: title.trim(),
+          genre: selectedGenres.join(", "),
+          year: yearNum,
+          description: description.trim(),
+          poster: finalPosterUrl,
+          cover: coverUrl.trim() || "",
+          subtitle: subtitle.trim() || "",
+          trailer: trailer.trim() || "",
+          url: finalMovieUrl,
+          seasonNumber: finalSeasonNum
+        });
+      } else {
+        setUploadStatusText("Saving movie metadata to Firestore...");
+        await addMovieToFirestore({
+          Title: title.trim(),
+          genre: selectedGenres.join(", "),
+          year: yearNum,
+          description: description.trim(),
+          poster: finalPosterUrl,
+          cover: coverUrl.trim() || undefined,
+          subtitle: subtitle.trim() || undefined,
+          trailer: trailer.trim() || undefined,
+          url: finalMovieUrl,
+          seasonNumber: finalSeasonNum
+        });
+      }
 
       setSuccess(true);
       if (onMovieAdded) onMovieAdded();
       setTimeout(() => {
         onClose();
-      }, 1500);
+      }, 1200);
     } catch (err: any) {
-      console.error("Movie upload error:", err);
-      setError(err.message || "Failed to upload movie. Please check your network and try again.");
+      console.error("Movie save error:", err);
+      setError(err.message || "Failed to save movie. Please check your network and try again.");
     } finally {
       setIsUploading(false);
       setUploadProgress(null);
@@ -351,18 +426,24 @@ export function UploadMovieModal({ isOpen, onClose, onMovieAdded }: UploadMovieM
           <X className="w-5 h-5" />
         </button>
 
+        {/* Modal Header */}
         <div className="flex items-center gap-3 mb-6">
           <div className="p-2.5 rounded-xl bg-rose-500/15 border border-rose-500/30 text-rose-400">
-            <Film className="w-6 h-6" />
+            {isEditMode ? <Pencil className="w-6 h-6" /> : <Film className="w-6 h-6" />}
           </div>
           <div>
-            <h3 className="text-xl font-bold font-heading text-white">Upload New Movie</h3>
+            <h3 className="text-xl font-bold font-heading text-white">
+              {isEditMode ? "Edit Movie / Series" : "Upload New Movie"}
+            </h3>
             <p className="text-xs text-neutral-400">
-              Upload an MP4 film and metadata directly to MuviDate's Firestore library.
+              {isEditMode
+                ? "Update movie details, media sources, subtitles, or trailer in Firestore."
+                : "Add an MP4 film or series with metadata and subtitles to MuviDate."}
             </p>
           </div>
         </div>
 
+        {/* Error notification */}
         {error && (
           <div className="flex items-start gap-2.5 p-3.5 bg-rose-500/10 border border-rose-500/30 rounded-xl text-rose-300 text-sm mb-5">
             <AlertCircle className="w-4 h-4 shrink-0 mt-0.5" />
@@ -370,15 +451,20 @@ export function UploadMovieModal({ isOpen, onClose, onMovieAdded }: UploadMovieM
           </div>
         )}
 
+        {/* Success notification */}
         {success && (
           <div className="flex items-center gap-2.5 p-4 bg-emerald-500/10 border border-emerald-500/30 rounded-xl text-emerald-300 text-sm mb-5">
             <CheckCircle2 className="w-5 h-5 text-emerald-400" />
-            <span>Movie uploaded and saved to Firestore successfully!</span>
+            <span>
+              {isEditMode
+                ? "Movie updated successfully in Firestore!"
+                : "Movie published successfully to MuviDate!"}
+            </span>
           </div>
         )}
 
         <form onSubmit={handleSubmit} className="space-y-5">
-          {/* Movie Source Selection: Exactly ONE option (Upload MP4 File OR MP4 URL) */}
+          {/* Movie Source Selection */}
           <div className="p-4 bg-neutral-950/80 rounded-xl border border-neutral-800 space-y-3">
             <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-2.5">
               <div>
@@ -386,7 +472,7 @@ export function UploadMovieModal({ isOpen, onClose, onMovieAdded }: UploadMovieM
                   <FileVideo className="w-4 h-4" /> Movie / Series Source *
                 </label>
                 <p className="text-[11px] text-neutral-400 mt-0.5">
-                  Upload an MP4 file for a Movie, or use Video URLs for Movies & TV Series
+                  Upload an MP4 file for a Movie, or enter Video URLs for Movies & TV Series
                 </p>
               </div>
 
@@ -421,7 +507,7 @@ export function UploadMovieModal({ isOpen, onClose, onMovieAdded }: UploadMovieM
               </div>
             </div>
 
-            {/* OPTION A: Upload MP4 File (Movies only) */}
+            {/* OPTION A: Upload MP4 File (Single Movie only) */}
             {movieSourceMode === "file" && (
               <div className="space-y-2 pt-1">
                 <div className="flex flex-col sm:flex-row sm:items-center justify-between text-[11px] text-neutral-400 gap-1">
@@ -466,7 +552,9 @@ export function UploadMovieModal({ isOpen, onClose, onMovieAdded }: UploadMovieM
                     className="border-2 border-dashed border-neutral-700 hover:border-rose-500/50 rounded-xl p-6 text-center cursor-pointer transition bg-neutral-900/40 hover:bg-neutral-900"
                   >
                     <UploadCloud className="w-8 h-8 text-neutral-400 mx-auto mb-2" />
-                    <p className="text-sm font-medium text-white">Click to select MP4 movie file</p>
+                    <p className="text-sm font-medium text-white">
+                      {isEditMode ? "Click to select a new MP4 video file (or keep current URL)" : "Click to select MP4 movie file"}
+                    </p>
                     <p className="text-xs text-neutral-400 mt-1">
                       Required: File must be .mp4 and no larger than 1 GB • For TV Series, switch to Video URL
                     </p>
@@ -484,7 +572,7 @@ export function UploadMovieModal({ isOpen, onClose, onMovieAdded }: UploadMovieM
                 </div>
 
                 <div className="grid grid-cols-1 sm:grid-cols-4 gap-3">
-                  {/* Optional Season Number */}
+                  {/* Season Number */}
                   <div className="sm:col-span-1">
                     <label className="block text-xs font-semibold uppercase tracking-wider text-neutral-300 mb-1 flex items-center gap-1">
                       <Layers className="w-3.5 h-3.5 text-rose-400" />
@@ -619,7 +707,6 @@ export function UploadMovieModal({ isOpen, onClose, onMovieAdded }: UploadMovieM
               {/* Dropdown Popover Menu */}
               {isGenreDropdownOpen && (
                 <div className="absolute left-0 right-0 top-full mt-1.5 z-50 bg-neutral-900 border border-neutral-700 rounded-xl shadow-2xl overflow-hidden animate-in fade-in slide-in-from-top-2 duration-150">
-                  {/* Search inside predefined genres */}
                   <div className="p-2 border-b border-neutral-800 bg-neutral-950">
                     <div className="relative">
                       <Search className="w-3.5 h-3.5 text-neutral-400 absolute left-2.5 top-1/2 -translate-y-1/2" />
@@ -634,7 +721,6 @@ export function UploadMovieModal({ isOpen, onClose, onMovieAdded }: UploadMovieM
                     </div>
                   </div>
 
-                  {/* Scrollable Predefined Genres List */}
                   <div className="max-h-56 overflow-y-auto p-1.5 space-y-0.5">
                     {filteredGenres.length > 0 ? (
                       filteredGenres.map((g) => {
@@ -661,7 +747,6 @@ export function UploadMovieModal({ isOpen, onClose, onMovieAdded }: UploadMovieM
                     )}
                   </div>
 
-                  {/* Footer status in dropdown */}
                   <div className="p-2 bg-neutral-950/80 border-t border-neutral-800 flex items-center justify-between text-[11px] text-neutral-400 px-3">
                     <span>{selectedGenres.length} selected</span>
                     {selectedGenres.length > 0 && (
@@ -755,7 +840,9 @@ export function UploadMovieModal({ isOpen, onClose, onMovieAdded }: UploadMovieM
                       className="w-full py-2.5 px-3 bg-neutral-950 border border-neutral-700 rounded-xl text-xs text-neutral-400 hover:text-white hover:border-neutral-600 flex items-center justify-center gap-2 transition"
                     >
                       <ImageIcon className="w-4 h-4 text-neutral-400" />
-                      <span>Select Portrait Poster (JPG, PNG, WebP)</span>
+                      <span>
+                        {isEditMode ? "Choose New Poster File (Or keep current)" : "Select Portrait Poster (JPG, PNG, WebP)"}
+                      </span>
                     </button>
                   )}
                 </div>
@@ -772,10 +859,10 @@ export function UploadMovieModal({ isOpen, onClose, onMovieAdded }: UploadMovieM
             </div>
           </div>
 
-          {/* Cover URL (Optional) */}
+          {/* Cover URL (Optional Landscape Banner) */}
           <div>
             <label className="block text-xs font-semibold uppercase tracking-wider text-neutral-300 mb-1.5">
-              Cover URL (Optional)
+              Cover URL (Optional Landscape Banner)
             </label>
             <input
               type="url"
@@ -785,6 +872,50 @@ export function UploadMovieModal({ isOpen, onClose, onMovieAdded }: UploadMovieM
               disabled={isUploading}
               className="w-full px-3.5 py-2.5 bg-neutral-950 border border-neutral-700 rounded-xl text-white placeholder-neutral-500 focus:outline-none focus:ring-2 focus:ring-rose-500 text-sm"
             />
+          </div>
+
+          {/* Subtitle URL(s) (Optional) */}
+          <div>
+            <div className="flex items-center justify-between mb-1.5">
+              <label className="text-xs font-semibold uppercase tracking-wider text-neutral-300 flex items-center gap-1.5">
+                <Subtitles className="w-3.5 h-3.5 text-rose-400" />
+                <span>Subtitle URL(s) (Optional)</span>
+              </label>
+              <span className="text-[10px] text-neutral-400">SRT or VTT</span>
+            </div>
+            <textarea
+              rows={2}
+              value={subtitle}
+              onChange={(e) => setSubtitle(e.target.value)}
+              placeholder="Single movie: https://example.com/movie.srt&#10;Series: ep1.srt, ep2.srt, ep3.srt"
+              disabled={isUploading}
+              className="w-full px-3.5 py-2 bg-neutral-950 border border-neutral-700 rounded-xl text-white placeholder-neutral-500 focus:outline-none focus:ring-2 focus:ring-rose-500 text-sm resize-none"
+            />
+            <p className="text-[10px] text-neutral-500 mt-1">
+              For a series, separate subtitle URLs with commas corresponding to each episode.
+            </p>
+          </div>
+
+          {/* Trailer Video URL (Optional) */}
+          <div>
+            <div className="flex items-center justify-between mb-1.5">
+              <label className="text-xs font-semibold uppercase tracking-wider text-neutral-300 flex items-center gap-1.5">
+                <Clapperboard className="w-3.5 h-3.5 text-rose-400" />
+                <span>Trailer Video URL (Optional)</span>
+              </label>
+              <span className="text-[10px] text-neutral-400">MP4 / Stream URL</span>
+            </div>
+            <input
+              type="url"
+              value={trailer}
+              onChange={(e) => setTrailer(e.target.value)}
+              placeholder="https://example.com/official-trailer.mp4"
+              disabled={isUploading}
+              className="w-full px-3.5 py-2.5 bg-neutral-950 border border-neutral-700 rounded-xl text-white placeholder-neutral-500 focus:outline-none focus:ring-2 focus:ring-rose-500 text-sm"
+            />
+            <p className="text-[10px] text-neutral-500 mt-1">
+              Trailer video will be playable inside the Movie Overview modal.
+            </p>
           </div>
 
           {/* Description */}
@@ -823,7 +954,6 @@ export function UploadMovieModal({ isOpen, onClose, onMovieAdded }: UploadMovieM
                 )}
               </div>
 
-              {/* Visual Progress Bar (when uploading MP4 file) */}
               {uploadProgress !== null && (
                 <div className="w-full h-2.5 bg-neutral-950 border border-neutral-800 rounded-full overflow-hidden">
                   <div
@@ -836,7 +966,7 @@ export function UploadMovieModal({ isOpen, onClose, onMovieAdded }: UploadMovieM
               <p className="text-[11px] text-neutral-400 leading-relaxed">
                 {movieSourceMode === "file" && movieFile
                   ? `Uploading MP4 "${movieFile.name}" (${(movieFile.size / (1024 * 1024)).toFixed(1)} MB) via Worker API. Please keep this tab open.`
-                  : "Please do not close this window while the movie is publishing to MuviDate."}
+                  : "Please do not close this window while the movie is saving to MuviDate."}
               </p>
             </div>
           )}
@@ -866,7 +996,7 @@ export function UploadMovieModal({ isOpen, onClose, onMovieAdded }: UploadMovieM
                   </span>
                 </>
               ) : (
-                <span>Publish to MuviDate</span>
+                <span>{isEditMode ? "Save Changes" : "Publish to MuviDate"}</span>
               )}
             </button>
           </div>

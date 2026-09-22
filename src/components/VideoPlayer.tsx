@@ -17,11 +17,12 @@ import {
   Crop,
   Film,
   Layers,
-  ChevronDown
+  ChevronDown,
+  Subtitles
 } from "lucide-react";
 import { rtdb } from "../lib/firebase";
 import { ref, onChildAdded, off, get } from "firebase/database";
-import { SeriesStructure, extractSeriesStructure, getEpisodeUrl } from "../lib/seriesUtils";
+import { SeriesStructure, extractSeriesStructure, getEpisodeUrl, getSubtitleForEpisode, convertSrtToVtt } from "../lib/seriesUtils";
 
 export interface VideoPlayerProps {
   src: string;
@@ -45,6 +46,7 @@ export interface VideoPlayerProps {
   currentSeason?: number;
   currentEpisode?: number;
   onSelectEpisode?: (seasonNum: number, episodeNum: number, episodeUrl: string) => void;
+  subtitle?: string;
 }
 
 function VideoPlayerComponent({
@@ -62,7 +64,8 @@ function VideoPlayerComponent({
   seriesStructure: propSeriesStructure,
   currentSeason: propCurrentSeason,
   currentEpisode: propCurrentEpisode,
-  onSelectEpisode
+  onSelectEpisode,
+  subtitle
 }: VideoPlayerProps) {
   const containerRef = useRef<HTMLDivElement>(null);
   const videoRef = useRef<HTMLVideoElement>(null);
@@ -81,6 +84,8 @@ function VideoPlayerComponent({
   const [showAudioMenu, setShowAudioMenu] = useState(false);
   const [showDisplayMenu, setShowDisplayMenu] = useState(false);
   const [displayMode, setDisplayMode] = useState<"fit" | "zoom" | "stretch">("fit");
+  const [isSubtitlesEnabled, setIsSubtitlesEnabled] = useState(true);
+  const [processedVttUrl, setProcessedVttUrl] = useState<string | null>(null);
 
   useEffect(() => {
     const handleGlobalClick = () => {
@@ -233,6 +238,74 @@ function VideoPlayerComponent({
       }
     }
   };
+
+  // Resolve current active subtitle URL (following selected episode)
+  const activeSubtitleUrl = React.useMemo(() => {
+    if (!subtitle || typeof subtitle !== "string" || !subtitle.trim()) return null;
+    return getSubtitleForEpisode(subtitle, selectedEpisodeNum);
+  }, [subtitle, selectedEpisodeNum]);
+
+  // Load and normalize subtitle content to WebVTT format
+  useEffect(() => {
+    if (!activeSubtitleUrl) {
+      setProcessedVttUrl(null);
+      return;
+    }
+
+    let isCancelled = false;
+    let createdBlobUrl: string | null = null;
+
+    const loadSub = async () => {
+      // Direct blob, data URI, or already VTT file
+      if (
+        activeSubtitleUrl.startsWith("blob:") ||
+        activeSubtitleUrl.startsWith("data:") ||
+        activeSubtitleUrl.toLowerCase().endsWith(".vtt")
+      ) {
+        if (!isCancelled) setProcessedVttUrl(activeSubtitleUrl);
+        return;
+      }
+
+      try {
+        const res = await fetch(activeSubtitleUrl);
+        if (res.ok) {
+          const text = await res.text();
+          const vtt = convertSrtToVtt(text);
+          const blob = new Blob([vtt], { type: "text/vtt" });
+          createdBlobUrl = URL.createObjectURL(blob);
+          if (!isCancelled) {
+            setProcessedVttUrl(createdBlobUrl);
+          }
+        } else {
+          if (!isCancelled) setProcessedVttUrl(activeSubtitleUrl);
+        }
+      } catch {
+        // Fetch or CORS error: fallback to original URL directly without breaking playback
+        if (!isCancelled) setProcessedVttUrl(activeSubtitleUrl);
+      }
+    };
+
+    loadSub();
+
+    return () => {
+      isCancelled = true;
+      if (createdBlobUrl) {
+        URL.revokeObjectURL(createdBlobUrl);
+      }
+    };
+  }, [activeSubtitleUrl]);
+
+  // Synchronize HTML5 textTrack mode when subtitle toggle or track URL changes
+  useEffect(() => {
+    const video = videoRef.current;
+    if (!video) return;
+    if (video.textTracks && video.textTracks.length > 0) {
+      for (let i = 0; i < video.textTracks.length; i++) {
+        video.textTracks[i].mode =
+          isSubtitlesEnabled && activeSubtitleUrl ? "showing" : "disabled";
+      }
+    }
+  }, [isSubtitlesEnabled, activeSubtitleUrl, processedVttUrl]);
 
   // Handle voice note recording: mute video during recording without pausing; restore previous mute state afterwards
   useEffect(() => {
@@ -966,7 +1039,18 @@ function VideoPlayerComponent({
               : "object-fill"
         }`}
         onClick={handleVideoClick}
-      />
+      >
+        {activeSubtitleUrl && (
+          <track
+            key={processedVttUrl || activeSubtitleUrl}
+            kind="subtitles"
+            label="Subtitles"
+            srcLang="en"
+            src={processedVttUrl || activeSubtitleUrl}
+            default={isSubtitlesEnabled}
+          />
+        )}
+      </video>
 
       {/* Buffering Indicator */}
       {isBuffering && !playbackError && (
@@ -1349,6 +1433,27 @@ function VideoPlayerComponent({
                   </div>
                 )}
               </div>
+            )}
+
+            {/* Subtitle / CC Control */}
+            {activeSubtitleUrl && (
+              <button
+                type="button"
+                onClick={(e) => {
+                  e.stopPropagation();
+                  setIsSubtitlesEnabled((prev) => !prev);
+                  resetControlsTimeout();
+                }}
+                className={`p-1.5 rounded-lg transition flex items-center justify-center text-xs ${
+                  isSubtitlesEnabled
+                    ? "bg-rose-600 text-white shadow-sm"
+                    : "hover:bg-white/15 text-neutral-400 hover:text-white"
+                }`}
+                aria-label="Toggle subtitles"
+                title={isSubtitlesEnabled ? "Disable Subtitles (CC)" : "Enable Subtitles (CC)"}
+              >
+                <Subtitles className="w-4 h-4" />
+              </button>
             )}
 
             {/* Display Scale Mode Control */}

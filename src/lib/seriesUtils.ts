@@ -213,3 +213,61 @@ export function getEpisodeUrl(
 
   return targetEpisode ? targetEpisode.url : null;
 }
+
+/**
+ * Parses comma-separated subtitle URLs into individual subtitle URLs.
+ */
+export function parseSubtitleUrls(rawSubtitle?: string): string[] {
+  if (!rawSubtitle || typeof rawSubtitle !== "string") return [];
+  return parseEpisodeUrls(rawSubtitle);
+}
+
+/**
+ * Returns the subtitle URL corresponding to a specific episode number (1-indexed).
+ * For single movies (or single subtitle URL), returns the single subtitle URL.
+ * For multi-episode series with comma-separated URLs:
+ * Episode 1 -> ep1.srt, Episode 2 -> ep2.srt, etc.
+ */
+export function getSubtitleForEpisode(
+  rawSubtitle?: string,
+  episodeNumber: number = 1
+): string | null {
+  if (!rawSubtitle || typeof rawSubtitle !== "string") return null;
+  const list = parseSubtitleUrls(rawSubtitle);
+  if (list.length === 0) return null;
+
+  const idx = Math.max(0, episodeNumber - 1);
+  if (idx < list.length) {
+    return list[idx];
+  }
+
+  // If there are fewer subtitles than episodes, return the first one if only 1 exists, or null
+  return list.length === 1 ? list[0] : null;
+}
+
+/**
+ * Converts SubRip (.srt) or plaintext captions to standard WebVTT format.
+ * If already valid WebVTT, returns as-is.
+ */
+export function convertSrtToVtt(content: string): string {
+  if (!content || typeof content !== "string") return "WEBVTT\n\n";
+  const trimmed = content.trim();
+  if (trimmed.startsWith("WEBVTT")) {
+    return trimmed + "\n";
+  }
+
+  // Normalize line endings
+  let normalized = trimmed.replace(/\r\n/g, "\n").replace(/\r/g, "\n");
+
+  // Replace comma decimal separators in timestamps: 00:00:20,000 --> 00:00:20.000
+  normalized = normalized.replace(
+    /(\d{1,2}:\d{2}:\d{2}),(\d{1,3})/g,
+    "$1.$2"
+  );
+  normalized = normalized.replace(
+    /(\d{2}:\d{2}),(\d{1,3})/g,
+    "00:$1.$2"
+  );
+
+  return `WEBVTT\n\n${normalized}\n`;
+}
