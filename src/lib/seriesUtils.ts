@@ -216,6 +216,8 @@ export function getEpisodeUrl(
 
 /**
  * Parses comma-separated subtitle URLs into individual subtitle URLs.
+ * - Trims whitespace around each URL
+ * - Ignores empty entries
  */
 export function parseSubtitleUrls(rawSubtitle?: string): string[] {
   if (!rawSubtitle || typeof rawSubtitle !== "string") return [];
@@ -224,9 +226,10 @@ export function parseSubtitleUrls(rawSubtitle?: string): string[] {
 
 /**
  * Returns the subtitle URL corresponding to a specific episode number (1-indexed).
- * For single movies (or single subtitle URL), returns the single subtitle URL.
- * For multi-episode series with comma-separated URLs:
- * Episode 1 -> ep1.srt, Episode 2 -> ep2.srt, etc.
+ * Episode 1 -> subtitle index 0 (ep1.srt)
+ * Episode 2 -> subtitle index 1 (ep2.srt)
+ * Episode 3 -> subtitle index 2 (ep3.srt)
+ * If the requested episode has no subtitle entry, returns null (never retains old episode subtitle).
  */
 export function getSubtitleForEpisode(
   rawSubtitle?: string,
@@ -238,35 +241,44 @@ export function getSubtitleForEpisode(
 
   const idx = Math.max(0, episodeNumber - 1);
   if (idx < list.length) {
-    return list[idx];
+    const candidate = list[idx].trim();
+    return candidate ? candidate : null;
   }
 
-  // If there are fewer subtitles than episodes, return the first one if only 1 exists, or null
-  return list.length === 1 ? list[0] : null;
+  // If there are fewer subtitles than the requested episode index, return null
+  return null;
 }
 
 /**
  * Converts SubRip (.srt) or plaintext captions to standard WebVTT format.
- * If already valid WebVTT, returns as-is.
+ * If already valid WebVTT, returns normalized WebVTT text.
+ * Strips UTF-8 BOM, standardizes timestamp comma separators (00:01:02,500 -> 00:01:02.500),
+ * and preserves Unicode subtitle text.
  */
 export function convertSrtToVtt(content: string): string {
   if (!content || typeof content !== "string") return "WEBVTT\n\n";
-  const trimmed = content.trim();
-  if (trimmed.startsWith("WEBVTT")) {
-    return trimmed + "\n";
+
+  // Strip Byte Order Mark (BOM) if present
+  let clean = content.replace(/^\uFEFF/, "").trim();
+  if (!clean) return "WEBVTT\n\n";
+
+  // If already WebVTT, ensure normalized header
+  if (clean.startsWith("WEBVTT")) {
+    return clean + "\n";
   }
 
-  // Normalize line endings
-  let normalized = trimmed.replace(/\r\n/g, "\n").replace(/\r/g, "\n");
+  // Normalize line endings to \n
+  let normalized = clean.replace(/\r\n/g, "\n").replace(/\r/g, "\n");
 
-  // Replace comma decimal separators in timestamps: 00:00:20,000 --> 00:00:20.000
+  // Convert SRT timestamp comma decimal separators to dots:
+  // e.g., 00:00:20,000 --> 00:00:24,500  =>  00:00:20.000 --> 00:00:24.500
   normalized = normalized.replace(
     /(\d{1,2}:\d{2}:\d{2}),(\d{1,3})/g,
     "$1.$2"
   );
   normalized = normalized.replace(
-    /(\d{2}:\d{2}),(\d{1,3})/g,
-    "00:$1.$2"
+    /(^|\n)(\d{2}:\d{2}),(\d{1,3})/g,
+    "$100:$2.$3"
   );
 
   return `WEBVTT\n\n${normalized}\n`;

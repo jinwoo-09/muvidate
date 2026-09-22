@@ -86,6 +86,8 @@ function VideoPlayerComponent({
   const [displayMode, setDisplayMode] = useState<"fit" | "zoom" | "stretch">("fit");
   const [isSubtitlesEnabled, setIsSubtitlesEnabled] = useState(true);
   const [processedVttUrl, setProcessedVttUrl] = useState<string | null>(null);
+  const activeBlobUrlRef = useRef<string | null>(null);
+  const subtitleRequestIdRef = useRef<number>(0);
 
   useEffect(() => {
     const handleGlobalClick = () => {
@@ -245,55 +247,79 @@ function VideoPlayerComponent({
     return getSubtitleForEpisode(subtitle, selectedEpisodeNum);
   }, [subtitle, selectedEpisodeNum]);
 
-  // Load and normalize subtitle content to WebVTT format
+  // Load and normalize subtitle content to WebVTT format via safe fetch & local Blob URL
   useEffect(() => {
+    const requestId = ++subtitleRequestIdRef.current;
+
+    // Immediately remove previous track from DOM and disable text tracks
+    setProcessedVttUrl(null);
+    if (videoRef.current && videoRef.current.textTracks && videoRef.current.textTracks.length > 0) {
+      for (let i = 0; i < videoRef.current.textTracks.length; i++) {
+        videoRef.current.textTracks[i].mode = "disabled";
+      }
+    }
+
+    // Revoke previous blob URL if any
+    if (activeBlobUrlRef.current) {
+      URL.revokeObjectURL(activeBlobUrlRef.current);
+      activeBlobUrlRef.current = null;
+    }
+
     if (!activeSubtitleUrl) {
-      setProcessedVttUrl(null);
       return;
     }
 
-    let isCancelled = false;
-    let createdBlobUrl: string | null = null;
+    // Direct blob: or data: URL
+    if (activeSubtitleUrl.startsWith("blob:") || activeSubtitleUrl.startsWith("data:")) {
+      setProcessedVttUrl(activeSubtitleUrl);
+      return;
+    }
 
     const loadSub = async () => {
-      // Direct blob, data URI, or already VTT file
-      if (
-        activeSubtitleUrl.startsWith("blob:") ||
-        activeSubtitleUrl.startsWith("data:") ||
-        activeSubtitleUrl.toLowerCase().endsWith(".vtt")
-      ) {
-        if (!isCancelled) setProcessedVttUrl(activeSubtitleUrl);
-        return;
-      }
-
       try {
         const res = await fetch(activeSubtitleUrl);
-        if (res.ok) {
-          const text = await res.text();
-          const vtt = convertSrtToVtt(text);
-          const blob = new Blob([vtt], { type: "text/vtt" });
-          createdBlobUrl = URL.createObjectURL(blob);
-          if (!isCancelled) {
-            setProcessedVttUrl(createdBlobUrl);
-          }
-        } else {
-          if (!isCancelled) setProcessedVttUrl(activeSubtitleUrl);
+        if (!res.ok) {
+          throw new Error(`HTTP error ${res.status}`);
         }
-      } catch {
-        // Fetch or CORS error: fallback to original URL directly without breaking playback
-        if (!isCancelled) setProcessedVttUrl(activeSubtitleUrl);
+        const text = await res.text();
+
+        // If another episode has been selected while fetch was in flight, ignore old result
+        if (subtitleRequestIdRef.current !== requestId) {
+          return;
+        }
+
+        const vtt = convertSrtToVtt(text);
+        const blob = new Blob([vtt], { type: "text/vtt" });
+        const localBlobUrl = URL.createObjectURL(blob);
+
+        if (subtitleRequestIdRef.current !== requestId) {
+          URL.revokeObjectURL(localBlobUrl);
+          return;
+        }
+
+        activeBlobUrlRef.current = localBlobUrl;
+        setProcessedVttUrl(localBlobUrl);
+      } catch (err) {
+        if (subtitleRequestIdRef.current === requestId) {
+          console.warn("Subtitle load failed (CORS or network error). Video playback will continue.", err);
+          setProcessedVttUrl(null);
+        }
       }
     };
 
     loadSub();
+  }, [activeSubtitleUrl]);
 
+  // Clean up Blob URL when player unmounts
+  useEffect(() => {
     return () => {
-      isCancelled = true;
-      if (createdBlobUrl) {
-        URL.revokeObjectURL(createdBlobUrl);
+      subtitleRequestIdRef.current += 1;
+      if (activeBlobUrlRef.current) {
+        URL.revokeObjectURL(activeBlobUrlRef.current);
+        activeBlobUrlRef.current = null;
       }
     };
-  }, [activeSubtitleUrl]);
+  }, []);
 
   // Synchronize HTML5 textTrack mode when subtitle toggle or track URL changes
   useEffect(() => {
@@ -302,10 +328,10 @@ function VideoPlayerComponent({
     if (video.textTracks && video.textTracks.length > 0) {
       for (let i = 0; i < video.textTracks.length; i++) {
         video.textTracks[i].mode =
-          isSubtitlesEnabled && activeSubtitleUrl ? "showing" : "disabled";
+          isSubtitlesEnabled && processedVttUrl ? "showing" : "disabled";
       }
     }
-  }, [isSubtitlesEnabled, activeSubtitleUrl, processedVttUrl]);
+  }, [isSubtitlesEnabled, processedVttUrl]);
 
   // Handle voice note recording: mute video during recording without pausing; restore previous mute state afterwards
   useEffect(() => {
@@ -1040,13 +1066,13 @@ function VideoPlayerComponent({
         }`}
         onClick={handleVideoClick}
       >
-        {activeSubtitleUrl && (
+        {processedVttUrl && (
           <track
-            key={processedVttUrl || activeSubtitleUrl}
+            key={processedVttUrl}
             kind="subtitles"
             label="Subtitles"
             srcLang="en"
-            src={processedVttUrl || activeSubtitleUrl}
+            src={processedVttUrl}
             default={isSubtitlesEnabled}
           />
         )}

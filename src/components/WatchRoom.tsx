@@ -95,6 +95,14 @@ export function WatchRoom({ roomCode, initialOfflineFile, onLeaveRoom }: WatchRo
     return room.movieUrl || "";
   }, [room?.movieSource, room?.movieUrl, room?.currentEpisodeUrl, room?.season, room?.episode, roomSeriesStructure, localVideoUrl]);
 
+  // Determine effective subtitle for current season (supports subtitle, subtitle2, subtitle3, etc.)
+  const effectiveSubtitle = useMemo(() => {
+    if (!room || room.movieSource === "offline") return undefined;
+    const currentSeason = room.season || 1;
+    const seasonSubtitleKey = currentSeason === 1 ? "subtitle" : `subtitle${currentSeason}`;
+    return (room as any)[seasonSubtitleKey] || room.subtitle;
+  }, [room?.movieSource, room?.season, room?.subtitle, (room as any)?.subtitle2, (room as any)?.subtitle3]);
+
   const handleOfflineFileSelected = useCallback((file: File) => {
     if (activeObjectUrlRef.current && activeObjectUrlRef.current.startsWith("blob:")) {
       URL.revokeObjectURL(activeObjectUrlRef.current);
@@ -209,6 +217,9 @@ export function WatchRoom({ roomCode, initialOfflineFile, onLeaveRoom }: WatchRo
           prev.season === data.season &&
           prev.episode === data.episode &&
           prev.currentEpisodeUrl === data.currentEpisodeUrl &&
+          prev.subtitle === data.subtitle &&
+          (prev as any).subtitle2 === (data as any).subtitle2 &&
+          (prev as any).subtitle3 === (data as any).subtitle3 &&
           prev.seriesUrls === data.seriesUrls;
 
         // Compare participants active count
@@ -792,7 +803,7 @@ export function WatchRoom({ roomCode, initialOfflineFile, onLeaveRoom }: WatchRo
                 currentSeason={room.season || 1}
                 currentEpisode={room.episode || 1}
                 onSelectEpisode={handleSelectEpisode}
-                subtitle={room.subtitle}
+                subtitle={effectiveSubtitle}
               />
             ) : (
               <div className="w-full aspect-video bg-neutral-900/90 border border-neutral-800 rounded-2xl flex flex-col items-center justify-center p-6 text-center">
