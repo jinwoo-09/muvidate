@@ -2,12 +2,12 @@ import React, { createContext, useContext, useEffect, useState } from "react";
 import { User, onAuthStateChanged } from "firebase/auth";
 import { 
   auth, 
-  ensureAnonymousAuth, 
   getUserProfile, 
   registerWithUsernameAndPassword,
   loginWithUsernameAndPassword,
   setAccountPassword,
-  updateUserProfilePhoto 
+  updateUserProfilePhoto,
+  logoutUser
 } from "../lib/firebase";
 import { UserProfile } from "../types";
 
@@ -21,6 +21,7 @@ interface AuthContextType {
   setPassword: (password: string) => Promise<void>;
   updatePhoto: (photoUrl: string) => Promise<void>;
   refreshProfile: () => Promise<void>;
+  logout: () => Promise<void>;
 }
 
 const AuthContext = createContext<AuthContextType | undefined>(undefined);
@@ -89,6 +90,13 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
     if (p) setProfile(p);
   };
 
+  const logout = async () => {
+    await logoutUser();
+    setUser(null);
+    setProfile(null);
+    setNeedsUsernameSetup(true);
+  };
+
   return (
     <AuthContext.Provider
       value={{
@@ -100,7 +108,8 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
         loginUser,
         setPassword,
         updatePhoto,
-        refreshProfile
+        refreshProfile,
+        logout
       }}
     >
       {children}

@@ -1,7 +1,6 @@
 import { initializeApp, getApps, getApp } from "firebase/app";
 import { 
   getAuth, 
-  signInAnonymously, 
   onAuthStateChanged, 
   User,
   signInWithEmailAndPassword,
@@ -9,6 +8,7 @@ import {
   linkWithCredential,
   EmailAuthProvider,
   updatePassword,
+  signOut,
   setPersistence,
   browserLocalPersistence
 } from "firebase/auth";
@@ -68,12 +68,12 @@ export const rtdb = getDatabase(app, firebaseConfig.databaseURL);
 
 // --- Auth & User Profile Functions ---
 
-export async function ensureAnonymousAuth(): Promise<User> {
-  if (auth.currentUser) {
-    return auth.currentUser;
-  }
-  const cred = await signInAnonymously(auth);
-  return cred.user;
+export function getCurrentAuthUser(): User | null {
+  return auth.currentUser;
+}
+
+export async function logoutUser(): Promise<void> {
+  await signOut(auth);
 }
 
 export async function getUserProfile(uid: string): Promise<UserProfile | null> {
@@ -97,12 +97,29 @@ export async function isUsernameTaken(username: string, excludeUid?: string): Pr
     where("usernameLowercase", "==", normalized)
   );
   const snap = await getDocs(q);
-  if (snap.empty) return false;
-  if (excludeUid) {
-    const isOnlyMe = snap.docs.every(d => d.id === excludeUid);
-    return !isOnlyMe;
+  if (!snap.empty) {
+    if (excludeUid) {
+      const isOnlyMe = snap.docs.every(d => d.id === excludeUid);
+      return !isOnlyMe;
+    }
+    return true;
   }
-  return true;
+
+  // Also verify against legacy records where username was stored without usernameLowercase
+  const legacyQuery = query(
+    collection(firestore, "users"),
+    where("username", "==", username.trim())
+  );
+  const legacySnap = await getDocs(legacyQuery);
+  if (!legacySnap.empty) {
+    if (excludeUid) {
+      const isOnlyMe = legacySnap.docs.every(d => d.id === excludeUid);
+      return !isOnlyMe;
+    }
+    return true;
+  }
+
+  return false;
 }
 
 // Helper to convert username to internal Firebase Auth email format
@@ -170,38 +187,33 @@ export async function registerWithUsernameAndPassword(
     throw new Error(`Username "${trimmed}" is already taken. Please choose another.`);
   }
 
-  let finalUid = auth.currentUser?.uid;
+  if (!password || password.length < 6) {
+    throw new Error("Password must be at least 6 characters long.");
+  }
+  const email = usernameToAuthEmail(trimmed);
 
-  if (password && password.length > 0) {
-    if (password.length < 6) {
-      throw new Error("Password must be at least 6 characters long.");
-    }
-    const email = usernameToAuthEmail(trimmed);
+  let finalUid: string;
 
-    if (auth.currentUser && auth.currentUser.isAnonymous) {
-      try {
-        const cred = await linkWithCredential(
-          auth.currentUser, 
-          EmailAuthProvider.credential(email, password)
-        );
-        finalUid = cred.user.uid;
-      } catch (linkErr: any) {
-        if (linkErr.code === "auth/credential-already-in-use" || linkErr.code === "auth/email-already-in-use") {
-          throw new Error(`An account with username "${trimmed}" already exists.`);
-        }
-        // Fallback: create fresh credential
-        const cred = await createUserWithEmailAndPassword(auth, email, password);
-        finalUid = cred.user.uid;
+  if (auth.currentUser && auth.currentUser.isAnonymous) {
+    try {
+      const cred = await linkWithCredential(
+        auth.currentUser, 
+        EmailAuthProvider.credential(email, password)
+      );
+      finalUid = cred.user.uid;
+    } catch (linkErr: any) {
+      if (linkErr.code === "auth/credential-already-in-use" || linkErr.code === "auth/email-already-in-use") {
+        throw new Error(`An account with username "${trimmed}" already exists.`);
       }
-    } else if (!auth.currentUser) {
+      // Fallback: create fresh email/password credential
       const cred = await createUserWithEmailAndPassword(auth, email, password);
       finalUid = cred.user.uid;
     }
-  }
-
-  if (!finalUid) {
-    const anon = await ensureAnonymousAuth();
-    finalUid = anon.uid;
+  } else if (!auth.currentUser) {
+    const cred = await createUserWithEmailAndPassword(auth, email, password);
+    finalUid = cred.user.uid;
+  } else {
+    finalUid = auth.currentUser.uid;
   }
 
   const profileData: UserProfile = {
