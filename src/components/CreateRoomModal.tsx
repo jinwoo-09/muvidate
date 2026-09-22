@@ -228,9 +228,12 @@ export function CreateRoomModal({
         roomData.episode = 1;
         roomData.currentEpisodeUrl = detectedSeries.seasons[0]?.episodes[0]?.url || movieUrl;
         if (sourceType === "firestore" && foundMovie) {
-          // Copy all season URLs
+          // Copy all season URLs and subtitle fields
           for (const k of Object.keys(foundMovie)) {
             if (/^url\d*$/i.test(k) && typeof (foundMovie as any)[k] === "string" && (foundMovie as any)[k].trim()) {
+              roomData[k] = (foundMovie as any)[k].trim();
+            }
+            if (/^subtitle\d*$/i.test(k) && typeof (foundMovie as any)[k] === "string" && (foundMovie as any)[k].trim()) {
               roomData[k] = (foundMovie as any)[k].trim();
             }
           }

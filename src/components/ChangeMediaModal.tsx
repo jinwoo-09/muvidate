@@ -259,6 +259,9 @@ export function ChangeMediaModal({
               if (/^url\d*$/i.test(k) && typeof (found as any)[k] === "string" && (found as any)[k].trim()) {
                 updateData[k] = (found as any)[k].trim();
               }
+              if (/^subtitle\d*$/i.test(k) && typeof (found as any)[k] === "string" && (found as any)[k].trim()) {
+                updateData[k] = (found as any)[k].trim();
+              }
             }
           }
         }
