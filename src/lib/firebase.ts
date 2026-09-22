@@ -364,7 +364,87 @@ export async function getDailyRoomCount(uid: string): Promise<number> {
   return snap.exists() ? (snap.val().count || 0) : 0;
 }
 
-// --- 4-Digit Room Code Generator ---
+// --- 4-Digit Room Code Generator & Expired Room Cleanup ---
+
+// Set to track in-flight room deletions to prevent concurrent duplicate delete operations
+const pendingRoomDeletions = new Set<string>();
+
+/**
+ * Safely delete a single room from RTDB if and only if its stored expiresAt is past the current timestamp.
+ * If expectedExpiresAt is provided, it verifies that the room's current expiresAt matches (ensuring no race condition
+ * with a freshly created room under the same code).
+ */
+export async function deleteExpiredRoomIfExpired(
+  roomCode: string, 
+  expectedExpiresAt?: number
+): Promise<boolean> {
+  if (!roomCode || pendingRoomDeletions.has(roomCode)) return false;
+  pendingRoomDeletions.add(roomCode);
+
+  try {
+    const roomRef = ref(rtdb, `rooms/${roomCode}`);
+    const snap = await get(roomRef);
+    if (!snap.exists()) {
+      return false;
+    }
+    const data = snap.val();
+    const now = Date.now();
+    if (data && typeof data.expiresAt === "number" && now > data.expiresAt) {
+      if (!expectedExpiresAt || data.expiresAt === expectedExpiresAt) {
+        await remove(roomRef);
+        return true;
+      }
+    }
+    return false;
+  } catch (err) {
+    console.warn(`Error deleting expired room #${roomCode}:`, err);
+    return false;
+  } finally {
+    pendingRoomDeletions.delete(roomCode);
+  }
+}
+
+/**
+ * Scan a map of rooms and delete all rooms that have reached their 24h expiration timestamp.
+ */
+export async function cleanupExpiredRoomsFromData(roomsData: Record<string, any>): Promise<void> {
+  if (!roomsData || typeof roomsData !== "object") return;
+  const now = Date.now();
+
+  const expiredEntries = Object.entries(roomsData).filter(([code, r]) => {
+    return (
+      code &&
+      r &&
+      typeof r.expiresAt === "number" &&
+      now > r.expiresAt &&
+      !pendingRoomDeletions.has(code)
+    );
+  });
+
+  if (expiredEntries.length === 0) return;
+
+  await Promise.allSettled(
+    expiredEntries.map(([code, r]) => deleteExpiredRoomIfExpired(code, r.expiresAt))
+  );
+}
+
+/**
+ * Check all rooms in RTDB and perform an immediate cleanup pass of expired rooms.
+ */
+export async function checkAndCleanupExpiredRooms(): Promise<void> {
+  try {
+    const roomsRef = ref(rtdb, "rooms");
+    const snap = await get(roomsRef);
+    if (snap.exists()) {
+      const data = snap.val();
+      if (data && typeof data === "object") {
+        await cleanupExpiredRoomsFromData(data);
+      }
+    }
+  } catch (err) {
+    console.warn("checkAndCleanupExpiredRooms error:", err);
+  }
+}
 
 export async function generateUniqueRoomCode(): Promise<string> {
   let attempts = 0;

@@ -1,6 +1,6 @@
 import React, { useState, useEffect, useMemo } from "react";
 import { AuthProvider, useAuth } from "./context/AuthContext";
-import { subscribeToMovies, rtdb } from "./lib/firebase";
+import { subscribeToMovies, rtdb, cleanupExpiredRoomsFromData, checkAndCleanupExpiredRooms } from "./lib/firebase";
 import { ref, onValue, off } from "firebase/database";
 import { Movie } from "./types";
 import { Navbar } from "./components/Navbar";
@@ -39,6 +39,11 @@ function MainContent() {
 
   const [activeUserRooms, setActiveUserRooms] = useState<any[]>([]);
 
+  // Cleanup expired rooms from RTDB on site load
+  useEffect(() => {
+    checkAndCleanupExpiredRooms();
+  }, []);
+
   // Subscribe to user's active watch rooms
   useEffect(() => {
     if (!user) {
@@ -53,6 +58,9 @@ function MainContent() {
         setActiveUserRooms([]);
         return;
       }
+
+      // Cleanup any expired rooms found in RTDB
+      cleanupExpiredRoomsFromData(data).catch(() => {});
 
       const now = Date.now();
       const roomsList = Object.entries(data).map(([code, r]: [string, any]) => ({

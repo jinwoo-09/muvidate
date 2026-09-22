@@ -1,6 +1,6 @@
 import React, { useState } from "react";
 import { useAuth } from "../context/AuthContext";
-import { rtdb } from "../lib/firebase";
+import { rtdb, deleteExpiredRoomIfExpired } from "../lib/firebase";
 import { ref, get, update } from "firebase/database";
 import { X, Users, AlertCircle, Loader2, ArrowRight } from "lucide-react";
 
@@ -50,6 +50,7 @@ export function JoinRoomModal({ isOpen, onClose, onRoomJoined }: JoinRoomModalPr
 
       // Check 24-hour expiration
       if (roomData.expiresAt && Date.now() > roomData.expiresAt) {
+        deleteExpiredRoomIfExpired(cleanCode, roomData.expiresAt).catch(() => {});
         setError(`Room #${cleanCode} has expired. Rooms are only valid for 24 hours.`);
         setIsJoining(false);
         return;

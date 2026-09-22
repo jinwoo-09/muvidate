@@ -1,6 +1,6 @@
 import React, { useState, useEffect, useRef, useCallback, useMemo } from "react";
 import { useAuth } from "../context/AuthContext";
-import { rtdb } from "../lib/firebase";
+import { rtdb, deleteExpiredRoomIfExpired } from "../lib/firebase";
 import { ref, onValue, off, update, set, push, onDisconnect } from "firebase/database";
 import { Room, RoomParticipant } from "../types";
 import { getVideoDuration, formatVideoTime } from "../lib/videoUtils";
@@ -227,6 +227,7 @@ export function WatchRoom({ roomCode, initialOfflineFile, onLeaveRoom }: WatchRo
 
       // Check 24 hour expiration
       if (data.expiresAt && Date.now() > data.expiresAt) {
+        deleteExpiredRoomIfExpired(roomCode, data.expiresAt).catch(() => {});
         setError(`Room #${roomCode} has expired (24-hour limit reached).`);
         return;
       }
