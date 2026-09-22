@@ -130,6 +130,11 @@ export function WatchRoom({ roomCode, initialOfflineFile, onLeaveRoom }: WatchRo
 
   const hasPostedJoinRef = useRef(false);
   const prevParticipantsRef = useRef<Record<string, boolean>>({});
+  const latestPlaybackStateRef = useRef<{
+    isPlaying: boolean;
+    currentTime: number;
+    lastUpdated: number;
+  } | null>(null);
 
   const postSystemMessage = useCallback((text: string) => {
     const chatRef = ref(rtdb, `rooms/${roomCode}/chat`);
@@ -320,10 +325,25 @@ export function WatchRoom({ roomCode, initialOfflineFile, onLeaveRoom }: WatchRo
     }
   }, [user, profile, roomCode, postSystemMessage]);
 
-  // Post system message when current user leaves (clean exit)
+  // Post system message when current user leaves (clean exit) & persist final room playback timeline
   useEffect(() => {
     return () => {
       if (user && profile && roomCode) {
+        // Save latest valid video playback timeline so rejoining resumes at last valid position
+        if (latestPlaybackStateRef.current && (isHost || !room?.controlsLocked)) {
+          const lastPlayback = latestPlaybackStateRef.current;
+          if (lastPlayback.currentTime > 0) {
+            const playbackRef = ref(rtdb, `rooms/${roomCode}/playbackState`);
+            update(playbackRef, {
+              isPlaying: lastPlayback.isPlaying,
+              currentTime: lastPlayback.currentTime,
+              lastUpdated: Date.now(),
+              updatedBy: user.uid,
+              updatedByUsername: profile.username
+            }).catch(() => {});
+          }
+        }
+
         const chatRef = ref(rtdb, `rooms/${roomCode}/chat`);
         const newMsgRef = push(chatRef);
         set(newMsgRef, {
@@ -336,7 +356,7 @@ export function WatchRoom({ roomCode, initialOfflineFile, onLeaveRoom }: WatchRo
         }).catch(() => {});
       }
     };
-  }, [user, profile, roomCode]);
+  }, [user, profile, roomCode, isHost, room?.controlsLocked]);
 
   // Track other participants' online status changes for abrupt leaves
   useEffect(() => {
@@ -377,9 +397,14 @@ export function WatchRoom({ roomCode, initialOfflineFile, onLeaveRoom }: WatchRo
 // Sync state emitter from VideoPlayer
   const handlePlaybackChange = useCallback((state: { isPlaying: boolean; currentTime: number }) => {
     if (!room || !user || !profile) return;
+    const now = Date.now();
+    latestPlaybackStateRef.current = {
+      isPlaying: state.isPlaying,
+      currentTime: state.currentTime,
+      lastUpdated: now
+    };
     if (room.controlsLocked && !isHost) return;
 
-    const now = Date.now();
     // Throttle frequent updates to avoid spamming RTDB
     lastSyncWriteTime.current = now;
 

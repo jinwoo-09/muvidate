@@ -158,6 +158,10 @@ function VideoPlayerComponent({
     audioTrackIndex?: number;
   } | null>(null);
 
+  const syncStateRef = useRef(syncState);
+  syncStateRef.current = syncState;
+  const hasInitialSyncAppliedRef = useRef(false);
+
   // Single-shot buffering recovery state tracking
   const wasBufferingRef = useRef(false);
   const isRecoveringFromBufferRef = useRef(false);
@@ -167,6 +171,7 @@ function VideoPlayerComponent({
     currentMediaKeyRef.current = `${roomCode || ""}:${src}`;
     wasBufferingRef.current = false;
     isRecoveringFromBufferRef.current = false;
+    hasInitialSyncAppliedRef.current = false;
   }, [roomCode, src]);
 
   const onVideoEndedRef = useRef(onVideoEnded);
@@ -500,16 +505,20 @@ function VideoPlayerComponent({
     const video = videoRef.current;
     if (!video || !syncState) return;
 
-    // Skip if this exact sync update has already been processed
+    const isInitialSync = !hasInitialSyncAppliedRef.current;
+    hasInitialSyncAppliedRef.current = true;
+
+    // Skip if this exact sync update has already been processed and this is not the initial mount
     if (
+      !isInitialSync &&
       lastSyncProcessedRef.current &&
       lastSyncProcessedRef.current.lastUpdated === syncState.lastUpdated
     ) {
       return;
     }
 
-    // If local user initiated this action, record it without resetting or interrupting local playback
-    if (syncState.updatedBy === currentUserId) {
+    // If local user initiated this action while already actively connected, record it without resetting local playback
+    if (!isInitialSync && syncState.updatedBy === currentUserId) {
       lastSyncProcessedRef.current = {
         lastUpdated: syncState.lastUpdated,
         isPlaying: syncState.isPlaying,
@@ -535,12 +544,18 @@ function VideoPlayerComponent({
       ? Math.max(0, syncState.currentTime + elapsed)
       : syncState.currentTime;
 
-    // Check drift tolerance (1.5 seconds) against expected current playback time
+    // On initial sync/rejoin or when time drift exceeds threshold (1.5 seconds)
     let hasMeaningfulSync = false;
     const timeDiff = Math.abs(video.currentTime - expectedTime);
-    if (timeDiff > 1.5) {
-      video.currentTime = expectedTime;
-      setCurrentTime(expectedTime);
+    if (isInitialSync || timeDiff > 1.5) {
+      if (expectedTime > 0 || isInitialSync) {
+        isApplyingRemoteSyncRef.current = true;
+        video.currentTime = expectedTime;
+        setCurrentTime(expectedTime);
+        setTimeout(() => {
+          isApplyingRemoteSyncRef.current = false;
+        }, 200);
+      }
       hasMeaningfulSync = true;
     }
 
@@ -551,13 +566,17 @@ function VideoPlayerComponent({
         // Autoplay policy fallback: muted play or wait for interaction
         console.warn("Autoplay blocked by browser until user gesture");
       }).finally(() => {
-        isApplyingRemoteSyncRef.current = false;
+        setTimeout(() => {
+          isApplyingRemoteSyncRef.current = false;
+        }, 200);
       });
       hasMeaningfulSync = true;
     } else if (!syncState.isPlaying && !video.paused) {
       isApplyingRemoteSyncRef.current = true;
       video.pause();
-      isApplyingRemoteSyncRef.current = false;
+      setTimeout(() => {
+        isApplyingRemoteSyncRef.current = false;
+      }, 200);
       hasMeaningfulSync = true;
     }
 
@@ -621,6 +640,38 @@ function VideoPlayerComponent({
       setIsBuffering(false);
       setPlaybackError(null);
       detectAudioTracksRef.current?.();
+
+      // Restore synchronized room timeline upon metadata loaded
+      if (syncStateRef.current) {
+        const sync = syncStateRef.current;
+        const now = Date.now();
+        const elapsed = sync.isPlaying && sync.lastUpdated
+          ? Math.max(0, (now - sync.lastUpdated) / 1000)
+          : 0;
+        const expectedTime = sync.isPlaying
+          ? Math.min(video.duration || Infinity, Math.max(0, sync.currentTime + elapsed))
+          : Math.min(video.duration || Infinity, Math.max(0, sync.currentTime));
+
+        if (expectedTime > 0) {
+          isApplyingRemoteSyncRef.current = true;
+          video.currentTime = expectedTime;
+          setCurrentTime(expectedTime);
+          setTimeout(() => {
+            isApplyingRemoteSyncRef.current = false;
+          }, 200);
+        }
+
+        if (sync.isPlaying && video.paused) {
+          isApplyingRemoteSyncRef.current = true;
+          video.play().catch(() => {}).finally(() => {
+            setTimeout(() => {
+              isApplyingRemoteSyncRef.current = false;
+            }, 200);
+          });
+        } else if (!sync.isPlaying && !video.paused) {
+          video.pause();
+        }
+      }
     };
 
     const onWaiting = () => {
