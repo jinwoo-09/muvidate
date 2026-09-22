@@ -162,7 +162,7 @@ function MainContent() {
     });
   }, [movies, selectedGenre, searchQuery]);
 
-  // Auto-rotating hero index every 3 seconds among movies
+  // Auto-rotating hero index every 10 seconds among movies
   const [heroIndex, setHeroIndex] = useState(0);
 
   // Available movies for hero banner (prioritizing movies that have a poster)
@@ -175,7 +175,7 @@ function MainContent() {
     if (heroCandidates.length <= 1) return;
     const interval = setInterval(() => {
       setHeroIndex((prev) => (prev + 1) % heroCandidates.length);
-    }, 3000);
+    }, 10000);
     return () => clearInterval(interval);
   }, [heroCandidates.length]);
 
