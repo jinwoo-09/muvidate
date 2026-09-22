@@ -250,27 +250,67 @@ export function WatchRoom({ roomCode, initialOfflineFile, onLeaveRoom }: WatchRo
 
     onValue(roomRef, handleRoomData);
 
-    // Update participant online status with onDisconnect support
-    if (user && profile) {
-      const participantRef = ref(rtdb, `rooms/${roomCode}/participants/${user.uid}`);
-      update(participantRef, {
-        isOnline: true,
-        joinedAt: Date.now(),
-        username: profile.username,
-        photoURL: profile.photoURL || ""
-      });
-      // Setup onDisconnect
-      onDisconnect(participantRef).update({ isOnline: false }).catch(() => {});
-    }
-
     return () => {
       off(roomRef, "value", handleRoomData);
-      if (user) {
-        const participantRef = ref(rtdb, `rooms/${roomCode}/participants/${user.uid}`);
-        update(participantRef, { isOnline: false }).catch(() => {});
+    };
+  }, [roomCode]);
+
+  // Robust Network Restore & User Presence Management with Firebase RTDB .info/connected
+  useEffect(() => {
+    if (!roomCode || !user || !profile) return;
+
+    const connectedRef = ref(rtdb, ".info/connected");
+    const participantRef = ref(rtdb, `rooms/${roomCode}/participants/${user.uid}`);
+
+    const handleConnectionChange = (snap: any) => {
+      const isConnected = snap.val() === true;
+      if (isConnected) {
+        // Immediately write/update presence as online/active upon successful connection/reconnect
+        update(participantRef, {
+          isOnline: true,
+          username: profile.username,
+          photoURL: profile.photoURL || "",
+          lastActive: Date.now()
+        }).catch(() => {});
+
+        // Re-register onDisconnect handler because Firebase disconnect triggers are connection-specific
+        onDisconnect(participantRef).update({
+          isOnline: false,
+          lastActive: Date.now()
+        }).catch(() => {});
       }
     };
-  }, [roomCode, user, profile]);
+
+    onValue(connectedRef, handleConnectionChange);
+
+    // Also touch presence on browser online event and window focus to guarantee immediate recovery
+    const handleBrowserOnlineOrFocus = () => {
+      if (navigator.onLine) {
+        update(participantRef, {
+          isOnline: true,
+          lastActive: Date.now()
+        }).catch(() => {});
+      }
+    };
+
+    window.addEventListener("online", handleBrowserOnlineOrFocus);
+    window.addEventListener("focus", handleBrowserOnlineOrFocus);
+    document.addEventListener("visibilitychange", handleBrowserOnlineOrFocus);
+
+    return () => {
+      off(connectedRef, "value", handleConnectionChange);
+      window.removeEventListener("online", handleBrowserOnlineOrFocus);
+      window.removeEventListener("focus", handleBrowserOnlineOrFocus);
+      document.removeEventListener("visibilitychange", handleBrowserOnlineOrFocus);
+
+      // Cancel onDisconnect and mark as offline on clean exit
+      onDisconnect(participantRef).cancel().catch(() => {});
+      update(participantRef, {
+        isOnline: false,
+        lastActive: Date.now()
+      }).catch(() => {});
+    };
+  }, [roomCode, user?.uid, profile?.username, profile?.photoURL]);
 
   // Post system message when current user joins
   useEffect(() => {

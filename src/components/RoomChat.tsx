@@ -1,11 +1,15 @@
 import React, { useState, useEffect, useRef } from "react";
 import { useAuth } from "../context/AuthContext";
-import { rtdb } from "../lib/firebase";
-import { ref, onValue, off, push, set } from "firebase/database";
+import { rtdb, getUserProfile } from "../lib/firebase";
+import { ref, onValue, off, push, set, update } from "firebase/database";
 import { ChatMessage } from "../types";
 import { VoiceNoteRecorder } from "./VoiceNoteRecorder";
 import { VoiceNotePlayer } from "./VoiceNotePlayer";
 import { Send, MessageSquare, Shield, Smile, X } from "lucide-react";
+
+// In-memory cache for user avatars across the app session to avoid redundant Firestore queries
+const avatarMemoryCache = new Map<string, string>();
+const pendingFetches = new Set<string>();
 
 interface RoomChatProps {
   roomCode: string;
@@ -26,6 +30,14 @@ export function RoomChat({
   const [isSending, setIsSending] = useState(false);
   const messagesEndRef = useRef<HTMLDivElement>(null);
   const [selectedAvatar, setSelectedAvatar] = useState<{ username: string; photoURL: string; initials: string } | null>(null);
+  const [, setAvatarCacheVersion] = useState(0);
+
+  // Synchronize current user's avatar into cache
+  useEffect(() => {
+    if (user?.uid && profile?.photoURL) {
+      avatarMemoryCache.set(user.uid, profile.photoURL);
+    }
+  }, [user?.uid, profile?.photoURL]);
 
   useEffect(() => {
     const chatRef = ref(rtdb, `rooms/${roomCode}/chat`);
@@ -54,6 +66,44 @@ export function RoomChat({
     };
   }, [roomCode]);
 
+  // Resolve avatars for message senders using cached lookups from user profile data
+  useEffect(() => {
+    if (messages.length === 0) return;
+
+    let hasNewFetches = false;
+    messages.forEach((msg) => {
+      if (!msg.uid || msg.uid === "system") return;
+
+      // If message already has a photoURL, populate cache
+      if (msg.photoURL && typeof msg.photoURL === "string" && msg.photoURL.trim() !== "") {
+        if (!avatarMemoryCache.has(msg.uid)) {
+          avatarMemoryCache.set(msg.uid, msg.photoURL);
+        }
+        return;
+      }
+
+      // If not in cache and not already fetching, fetch sender's profile from Firestore
+      if (!avatarMemoryCache.has(msg.uid) && !pendingFetches.has(msg.uid)) {
+        pendingFetches.add(msg.uid);
+        hasNewFetches = true;
+
+        getUserProfile(msg.uid)
+          .then((prof) => {
+            const photo = prof?.photoURL || "";
+            avatarMemoryCache.set(msg.uid, photo);
+            setAvatarCacheVersion((v) => v + 1);
+          })
+          .catch((err) => {
+            console.warn(`Failed to resolve avatar for user ${msg.uid}:`, err);
+            avatarMemoryCache.set(msg.uid, "");
+          })
+          .finally(() => {
+            pendingFetches.delete(msg.uid);
+          });
+      }
+    });
+  }, [messages]);
+
   useEffect(() => {
     messagesEndRef.current?.scrollIntoView({ behavior: "smooth" });
   }, [messages]);
@@ -67,17 +117,25 @@ export function RoomChat({
     try {
       const chatRef = ref(rtdb, `rooms/${roomCode}/chat`);
       const newMsgRef = push(chatRef);
+      const photoURL = profile.photoURL || avatarMemoryCache.get(user.uid) || "";
       const msg: ChatMessage = {
         id: newMsgRef.key || Date.now().toString(),
         uid: user.uid,
         username: profile.username,
-        photoURL: profile.photoURL || "",
+        photoURL,
         type: "text",
         text,
         createdAt: Date.now()
       };
       await set(newMsgRef, msg);
       setInputText("");
+
+      // Ensure user presence is active in the room upon sending message
+      const participantRef = ref(rtdb, `rooms/${roomCode}/participants/${user.uid}`);
+      update(participantRef, {
+        isOnline: true,
+        lastActive: Date.now()
+      }).catch(() => {});
     } catch (err) {
       console.error("Send message error:", err);
     } finally {
@@ -89,16 +147,24 @@ export function RoomChat({
     if (!user || !profile || isMovieCompleted) return;
     const chatRef = ref(rtdb, `rooms/${roomCode}/chat`);
     const newMsgRef = push(chatRef);
+    const photoURL = profile.photoURL || avatarMemoryCache.get(user.uid) || "";
     const msg: ChatMessage = {
       id: newMsgRef.key || Date.now().toString(),
       uid: user.uid,
       username: profile.username,
-      photoURL: profile.photoURL || "",
+      photoURL,
       type: "voice",
       audioUrl,
       createdAt: Date.now()
     };
     await set(newMsgRef, msg);
+
+    // Ensure user presence is active in the room upon sending voice note
+    const participantRef = ref(rtdb, `rooms/${roomCode}/participants/${user.uid}`);
+    update(participantRef, {
+      isOnline: true,
+      lastActive: Date.now()
+    }).catch(() => {});
   };
 
   const formatTime = (timestamp?: number) => {
@@ -153,6 +219,13 @@ export function RoomChat({
             const isMe = msg.uid === user?.uid;
             const isHost = msg.uid === adminUid;
             const initials = msg.username ? msg.username.slice(0, 2).toUpperCase() : "U";
+            
+            // Resolve effective photo URL from message or cached user profile
+            const effectivePhotoURL =
+              msg.photoURL ||
+              avatarMemoryCache.get(msg.uid) ||
+              (isMe ? profile?.photoURL : "") ||
+              "";
 
             return (
               <div
@@ -163,14 +236,14 @@ export function RoomChat({
                 <div 
                   onClick={() => setSelectedAvatar({
                     username: msg.username,
-                    photoURL: msg.photoURL || "",
+                    photoURL: effectivePhotoURL,
                     initials
                   })}
                   className="w-7 h-7 rounded-full overflow-hidden bg-neutral-800 shrink-0 border border-neutral-700 flex items-center justify-center text-[10px] font-bold text-neutral-300 shadow-sm mt-0.5 cursor-pointer hover:scale-105 active:scale-95 transition"
                 >
-                  {msg.photoURL ? (
+                  {effectivePhotoURL ? (
                     <img
-                      src={msg.photoURL}
+                      src={effectivePhotoURL}
                       alt={msg.username}
                       className="w-full h-full object-cover"
                       referrerPolicy="no-referrer"

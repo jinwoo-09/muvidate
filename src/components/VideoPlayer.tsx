@@ -158,6 +158,17 @@ function VideoPlayerComponent({
     audioTrackIndex?: number;
   } | null>(null);
 
+  // Single-shot buffering recovery state tracking
+  const wasBufferingRef = useRef(false);
+  const isRecoveringFromBufferRef = useRef(false);
+  const currentMediaKeyRef = useRef(`${roomCode || ""}:${src}`);
+
+  useEffect(() => {
+    currentMediaKeyRef.current = `${roomCode || ""}:${src}`;
+    wasBufferingRef.current = false;
+    isRecoveringFromBufferRef.current = false;
+  }, [roomCode, src]);
+
   const onVideoEndedRef = useRef(onVideoEnded);
   onVideoEndedRef.current = onVideoEnded;
 
@@ -616,17 +627,92 @@ function VideoPlayerComponent({
       // Only show buffering indicator if video is not paused, not ended, and actively lacking media data
       if (video && !video.paused && !video.ended && video.readyState < 3) {
         setIsBuffering(true);
+        wasBufferingRef.current = true;
       }
     };
 
     const onStalled = () => {
       if (video && !video.paused && !video.ended && video.readyState < 3) {
         setIsBuffering(true);
+        wasBufferingRef.current = true;
       }
     };
 
     const onPlaying = () => {
       setIsBuffering(false);
+
+      // Single-shot buffering recovery:
+      // If the video was genuinely buffering/stalled and has now recovered,
+      // fetch the latest room playback state once to resync any lost timeline drift
+      if (wasBufferingRef.current && !isRecoveringFromBufferRef.current && roomCode) {
+        wasBufferingRef.current = false;
+        isRecoveringFromBufferRef.current = true;
+
+        const capturedMediaKey = currentMediaKeyRef.current;
+        const capturedRoomCode = roomCode;
+        const playbackRef = ref(rtdb, `rooms/${capturedRoomCode}/playbackState`);
+
+        get(playbackRef)
+          .then((snapshot) => {
+            const currentVid = videoRef.current;
+            // Ignore stale recovery request if media, room, or video element has changed
+            if (
+              !currentVid ||
+              currentMediaKeyRef.current !== capturedMediaKey ||
+              roomCode !== capturedRoomCode
+            ) {
+              return;
+            }
+
+            const latestState = snapshot.val();
+            if (!latestState || typeof latestState.currentTime !== "number") return;
+
+            const now = Date.now();
+            const elapsed = latestState.isPlaying && latestState.lastUpdated
+              ? Math.max(0, (now - latestState.lastUpdated) / 1000)
+              : 0;
+            const expectedTime = latestState.isPlaying
+              ? Math.max(0, latestState.currentTime + elapsed)
+              : latestState.currentTime;
+
+            const timeDiff = Math.abs(currentVid.currentTime - expectedTime);
+
+            // If time drift is noticeable (> 1.0s), resync local playback position
+            if (timeDiff > 1.0) {
+              isApplyingRemoteSyncRef.current = true;
+              currentVid.currentTime = expectedTime;
+              setCurrentTime(expectedTime);
+              triggerSyncIndicator();
+              setTimeout(() => {
+                isApplyingRemoteSyncRef.current = false;
+              }, 200);
+            }
+
+            // Also ensure play/pause matches latest room timeline
+            if (latestState.isPlaying && currentVid.paused) {
+              isApplyingRemoteSyncRef.current = true;
+              currentVid.play().catch(() => {}).finally(() => {
+                setTimeout(() => {
+                  isApplyingRemoteSyncRef.current = false;
+                }, 200);
+              });
+            } else if (!latestState.isPlaying && !currentVid.paused) {
+              isApplyingRemoteSyncRef.current = true;
+              currentVid.pause();
+              setTimeout(() => {
+                isApplyingRemoteSyncRef.current = false;
+              }, 200);
+            }
+          })
+          .catch((err) => {
+            console.warn("Buffering recovery sync fetch notice:", err);
+          })
+          .finally(() => {
+            isRecoveringFromBufferRef.current = false;
+          });
+      } else {
+        wasBufferingRef.current = false;
+      }
     };
 
     const onCanPlay = () => {
