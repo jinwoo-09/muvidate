@@ -95,6 +95,7 @@ export function UploadMovieModal({
   const movieInputRef = useRef<HTMLInputElement>(null);
   const posterInputRef = useRef<HTMLInputElement>(null);
   const genreDropdownRef = useRef<HTMLDivElement>(null);
+  const modalScrollRef = useRef<HTMLDivElement>(null);
 
   // Sync state when modal opens or movieToEdit changes
   useEffect(() => {
@@ -102,6 +103,10 @@ export function UploadMovieModal({
       setError(null);
       setSuccess(false);
       return;
+    }
+
+    if (modalScrollRef.current) {
+      modalScrollRef.current.scrollTop = 0;
     }
 
     if (movieToEdit) {
@@ -415,24 +420,27 @@ export function UploadMovieModal({
   );
 
   return (
-    <div className="fixed inset-0 z-[20000] flex items-center justify-center p-4 bg-black/85 backdrop-blur-md overflow-y-auto">
-      <div className="w-full max-w-2xl bg-neutral-900 border border-neutral-800 rounded-2xl p-6 sm:p-8 shadow-2xl relative my-8">
+    <div
+      ref={modalScrollRef}
+      className="fixed inset-0 z-[20000] overflow-y-auto bg-black/85 backdrop-blur-md p-3 sm:p-6 flex items-start justify-center"
+    >
+      <div className="w-full max-w-2xl bg-neutral-900 border border-neutral-800 rounded-2xl p-4 sm:p-8 shadow-2xl relative my-4 sm:my-8 shrink-0">
         <button
           onClick={onClose}
           disabled={isUploading}
-          className="absolute top-5 right-5 p-2 text-neutral-400 hover:text-white rounded-lg hover:bg-neutral-800 transition disabled:opacity-40"
+          className="absolute top-4 sm:top-5 right-4 sm:right-5 p-2 text-neutral-400 hover:text-white rounded-lg hover:bg-neutral-800 transition disabled:opacity-40"
           aria-label="Close"
         >
           <X className="w-5 h-5" />
         </button>
 
         {/* Modal Header */}
-        <div className="flex items-center gap-3 mb-6">
-          <div className="p-2.5 rounded-xl bg-rose-500/15 border border-rose-500/30 text-rose-400">
-            {isEditMode ? <Pencil className="w-6 h-6" /> : <Film className="w-6 h-6" />}
+        <div className="flex items-center gap-3 mb-5 sm:mb-6 pr-8">
+          <div className="p-2.5 rounded-xl bg-rose-500/15 border border-rose-500/30 text-rose-400 shrink-0">
+            {isEditMode ? <Pencil className="w-5 h-5 sm:w-6 sm:h-6" /> : <Film className="w-5 h-5 sm:w-6 sm:h-6" />}
           </div>
           <div>
-            <h3 className="text-xl font-bold font-heading text-white">
+            <h3 className="text-lg sm:text-xl font-bold font-heading text-white">
               {isEditMode ? "Edit Movie / Series" : "Upload New Movie"}
             </h3>
             <p className="text-xs text-neutral-400">
@@ -454,7 +462,7 @@ export function UploadMovieModal({
         {/* Success notification */}
         {success && (
           <div className="flex items-center gap-2.5 p-4 bg-emerald-500/10 border border-emerald-500/30 rounded-xl text-emerald-300 text-sm mb-5">
-            <CheckCircle2 className="w-5 h-5 text-emerald-400" />
+            <CheckCircle2 className="w-5 h-5 text-emerald-400 shrink-0" />
             <span>
               {isEditMode
                 ? "Movie updated successfully in Firestore!"
@@ -465,7 +473,7 @@ export function UploadMovieModal({
 
         <form onSubmit={handleSubmit} className="space-y-5">
           {/* Movie Source Selection */}
-          <div className="p-4 bg-neutral-950/80 rounded-xl border border-neutral-800 space-y-3">
+          <div className="p-3.5 sm:p-4 bg-neutral-950/80 rounded-xl border border-neutral-800 space-y-3">
             <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-2.5">
               <div>
                 <label className="text-xs font-semibold uppercase tracking-wider text-rose-400 flex items-center gap-1.5">
@@ -477,12 +485,12 @@ export function UploadMovieModal({
               </div>
 
               {/* Segmented Toggle Control */}
-              <div className="inline-flex p-1 bg-neutral-900 border border-neutral-800 rounded-xl self-start sm:self-auto">
+              <div className="inline-flex p-1 bg-neutral-900 border border-neutral-800 rounded-xl self-stretch sm:self-auto flex-col sm:flex-row gap-1 sm:gap-0">
                 <button
                   type="button"
                   onClick={() => handleSelectMovieSourceMode("file")}
                   disabled={isUploading}
-                  className={`px-3 py-1.5 rounded-lg text-xs font-semibold transition flex items-center gap-1.5 ${
+                  className={`px-3 py-1.5 rounded-lg text-xs font-semibold transition flex items-center justify-center sm:justify-start gap-1.5 ${
                     movieSourceMode === "file"
                       ? "bg-rose-600 text-white shadow-sm"
                       : "text-neutral-400 hover:text-white"
@@ -495,7 +503,7 @@ export function UploadMovieModal({
                   type="button"
                   onClick={() => handleSelectMovieSourceMode("url")}
                   disabled={isUploading}
-                  className={`px-3 py-1.5 rounded-lg text-xs font-semibold transition flex items-center gap-1.5 ${
+                  className={`px-3 py-1.5 rounded-lg text-xs font-semibold transition flex items-center justify-center sm:justify-start gap-1.5 ${
                     movieSourceMode === "url"
                       ? "bg-rose-600 text-white shadow-sm"
                       : "text-neutral-400 hover:text-white"
@@ -524,10 +532,10 @@ export function UploadMovieModal({
                 />
 
                 {movieFile ? (
-                  <div className="flex items-center justify-between p-3 bg-neutral-900 border border-neutral-700 rounded-lg">
-                    <div className="flex items-center gap-3 overflow-hidden">
+                  <div className="flex items-center justify-between p-3 bg-neutral-900 border border-neutral-700 rounded-lg gap-2">
+                    <div className="flex items-center gap-2.5 sm:gap-3 overflow-hidden min-w-0">
                       <FileVideo className="w-5 h-5 text-rose-400 shrink-0" />
-                      <div className="truncate">
+                      <div className="truncate min-w-0">
                         <p className="text-sm font-medium text-white truncate">{movieFile.name}</p>
                         <p className="text-xs text-neutral-400">
                           {(movieFile.size / (1024 * 1024)).toFixed(2)} MB • MP4
@@ -541,7 +549,7 @@ export function UploadMovieModal({
                         if (movieInputRef.current) movieInputRef.current.value = "";
                       }}
                       disabled={isUploading}
-                      className="text-xs text-neutral-400 hover:text-rose-400 px-2.5 py-1 rounded hover:bg-neutral-800 transition"
+                      className="text-xs text-neutral-400 hover:text-rose-400 px-2.5 py-1 rounded hover:bg-neutral-800 transition shrink-0"
                     >
                       Change
                     </button>
@@ -549,7 +557,7 @@ export function UploadMovieModal({
                 ) : (
                   <div
                     onClick={() => movieInputRef.current?.click()}
-                    className="border-2 border-dashed border-neutral-700 hover:border-rose-500/50 rounded-xl p-6 text-center cursor-pointer transition bg-neutral-900/40 hover:bg-neutral-900"
+                    className="border-2 border-dashed border-neutral-700 hover:border-rose-500/50 rounded-xl p-5 sm:p-6 text-center cursor-pointer transition bg-neutral-900/40 hover:bg-neutral-900"
                   >
                     <UploadCloud className="w-8 h-8 text-neutral-400 mx-auto mb-2" />
                     <p className="text-sm font-medium text-white">
