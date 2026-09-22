@@ -129,7 +129,9 @@ export function WatchRoom({ roomCode, initialOfflineFile, onLeaveRoom }: WatchRo
   const lastProcessedMediaKeyRef = useRef<string>("");
 
   const hasPostedJoinRef = useRef(false);
+  const isInitialSnapshotRef = useRef(false);
   const prevParticipantsRef = useRef<Record<string, boolean>>({});
+  const lastPresenceMessageTimestampRef = useRef<Record<string, { status: boolean; time: number }>>({});
   const latestPlaybackStateRef = useRef<{
     isPlaying: boolean;
     currentTime: number;
@@ -148,6 +150,38 @@ export function WatchRoom({ roomCode, initialOfflineFile, onLeaveRoom }: WatchRo
       createdAt: Date.now()
     }).catch(console.error);
   }, [roomCode]);
+
+  // Handle user explicitly leaving the room (click Leave Room, Back to Home, etc.)
+  const handleExplicitLeaveRoom = useCallback(() => {
+    if (user && profile && roomCode) {
+      // Save latest valid video playback timeline
+      if (latestPlaybackStateRef.current && (isHost || !room?.controlsLocked)) {
+        const lastPlayback = latestPlaybackStateRef.current;
+        if (lastPlayback.currentTime > 0) {
+          const playbackRef = ref(rtdb, `rooms/${roomCode}/playbackState`);
+          update(playbackRef, {
+            isPlaying: lastPlayback.isPlaying,
+            currentTime: lastPlayback.currentTime,
+            lastUpdated: Date.now(),
+            updatedBy: user.uid,
+            updatedByUsername: profile.username
+          }).catch(() => {});
+        }
+      }
+
+      // Mark participant as offline and cancel onDisconnect
+      const participantRef = ref(rtdb, `rooms/${roomCode}/participants/${user.uid}`);
+      onDisconnect(participantRef).cancel().catch(() => {});
+      update(participantRef, {
+        isOnline: false,
+        lastActive: Date.now()
+      }).catch(() => {});
+
+      // Post system leave message
+      postSystemMessage(`@${profile.username} has left the room.`);
+    }
+    onLeaveRoom();
+  }, [user, profile, roomCode, isHost, room?.controlsLocked, postSystemMessage, onLeaveRoom]);
 
   useEffect(() => {
     if (!room) return;
@@ -267,6 +301,20 @@ export function WatchRoom({ roomCode, initialOfflineFile, onLeaveRoom }: WatchRo
     const connectedRef = ref(rtdb, ".info/connected");
     const participantRef = ref(rtdb, `rooms/${roomCode}/participants/${user.uid}`);
 
+    // Mark online immediately upon component mount/join
+    update(participantRef, {
+      isOnline: true,
+      username: profile.username,
+      photoURL: profile.photoURL || "",
+      lastActive: Date.now()
+    }).catch(() => {});
+
+    // Register onDisconnect handler
+    onDisconnect(participantRef).update({
+      isOnline: false,
+      lastActive: Date.now()
+    }).catch(() => {});
+
     const handleConnectionChange = (snap: any) => {
       const isConnected = snap.val() === true;
       if (isConnected) {
@@ -308,12 +356,8 @@ export function WatchRoom({ roomCode, initialOfflineFile, onLeaveRoom }: WatchRo
       window.removeEventListener("focus", handleBrowserOnlineOrFocus);
       document.removeEventListener("visibilitychange", handleBrowserOnlineOrFocus);
 
-      // Cancel onDisconnect and mark as offline on clean exit
+      // Cancel onDisconnect on clean component teardown
       onDisconnect(participantRef).cancel().catch(() => {});
-      update(participantRef, {
-        isOnline: false,
-        lastActive: Date.now()
-      }).catch(() => {});
     };
   }, [roomCode, user?.uid, profile?.username, profile?.photoURL]);
 
@@ -325,7 +369,7 @@ export function WatchRoom({ roomCode, initialOfflineFile, onLeaveRoom }: WatchRo
     }
   }, [user, profile, roomCode, postSystemMessage]);
 
-  // Post system message when current user leaves (clean exit) & persist final room playback timeline
+  // Persist final room playback timeline on unmount
   useEffect(() => {
     return () => {
       if (user && profile && roomCode) {
@@ -343,27 +387,27 @@ export function WatchRoom({ roomCode, initialOfflineFile, onLeaveRoom }: WatchRo
             }).catch(() => {});
           }
         }
-
-        const chatRef = ref(rtdb, `rooms/${roomCode}/chat`);
-        const newMsgRef = push(chatRef);
-        set(newMsgRef, {
-          id: newMsgRef.key || Date.now().toString(),
-          uid: "system",
-          username: "System",
-          type: "system",
-          text: `@${profile.username} has left the room.`,
-          createdAt: Date.now()
-        }).catch(() => {});
       }
     };
   }, [user, profile, roomCode, isHost, room?.controlsLocked]);
 
-  // Track other participants' online status changes for abrupt leaves
+  // Track other participants' online status changes for abrupt disconnects
   useEffect(() => {
     if (!room || !room.participants || !user) return;
 
     const currentParticipants = room.participants;
     const prevParticipants = prevParticipantsRef.current;
+
+    // On the first snapshot, simply record initial participant states without emitting any messages
+    if (!isInitialSnapshotRef.current) {
+      isInitialSnapshotRef.current = true;
+      const initialStatuses: Record<string, boolean> = {};
+      Object.entries(currentParticipants).forEach(([uid, p]) => {
+        initialStatuses[uid] = !!p.isOnline;
+      });
+      prevParticipantsRef.current = initialStatuses;
+      return;
+    }
 
     const isHostOnline = room.participants[room.adminUid]?.isOnline;
     const isCurrentUserHost = user.uid === room.adminUid;
@@ -373,6 +417,7 @@ export function WatchRoom({ roomCode, initialOfflineFile, onLeaveRoom }: WatchRo
       .sort((a, b) => a.uid.localeCompare(b.uid));
 
     const isResponsibleForOthers = isCurrentUserHost || (!isHostOnline && activeParticipants[0]?.uid === user.uid);
+    const now = Date.now();
 
     Object.entries(currentParticipants).forEach(([uid, p]) => {
       if (uid === user.uid) return;
@@ -381,8 +426,13 @@ export function WatchRoom({ roomCode, initialOfflineFile, onLeaveRoom }: WatchRo
       const isOnline = p.isOnline === true;
 
       if (wasOnline && !isOnline) {
-        if (isResponsibleForOthers) {
-          postSystemMessage(`@${p.username} has left the room.`);
+        const lastRecord = lastPresenceMessageTimestampRef.current[uid];
+        // Ensure at least 3 seconds between repeated presence messages for the same user
+        if (!lastRecord || lastRecord.status !== false || now - lastRecord.time > 3000) {
+          lastPresenceMessageTimestampRef.current[uid] = { status: false, time: now };
+          if (isResponsibleForOthers) {
+            postSystemMessage(`@${p.username} has left the room.`);
+          }
         }
       }
     });
@@ -602,7 +652,7 @@ export function WatchRoom({ roomCode, initialOfflineFile, onLeaveRoom }: WatchRo
         <h3 className="text-xl font-bold font-heading text-white mb-2">Room Inactive</h3>
         <p className="text-sm text-neutral-400 mb-6">{error || "This watch room is no longer accessible."}</p>
         <button
-          onClick={onLeaveRoom}
+          onClick={handleExplicitLeaveRoom}
           className="px-6 py-2.5 bg-neutral-800 hover:bg-neutral-700 text-white text-xs font-semibold rounded-xl transition flex items-center gap-2"
         >
           <ArrowLeft className="w-4 h-4" />
@@ -622,7 +672,7 @@ export function WatchRoom({ roomCode, initialOfflineFile, onLeaveRoom }: WatchRo
       <div className="flex flex-wrap items-center justify-between gap-3 p-3 bg-neutral-900/90 border border-neutral-800 rounded-2xl backdrop-blur-md shadow-xl">
         <div className="flex items-center gap-3">
           <button
-            onClick={onLeaveRoom}
+            onClick={handleExplicitLeaveRoom}
             className="p-2 text-neutral-400 hover:text-white rounded-xl hover:bg-neutral-800 transition flex items-center gap-1.5 text-xs font-semibold"
             title="Leave Room"
           >
@@ -830,7 +880,7 @@ export function WatchRoom({ roomCode, initialOfflineFile, onLeaveRoom }: WatchRo
               </button>
             )}
             <button
-              onClick={onLeaveRoom}
+              onClick={handleExplicitLeaveRoom}
               className="px-4 py-2 bg-neutral-800 hover:bg-neutral-700 text-neutral-300 hover:text-white text-xs font-semibold rounded-xl transition"
             >
               Browse Movies
