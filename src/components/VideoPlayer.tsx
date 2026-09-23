@@ -453,25 +453,22 @@ function VideoPlayerComponent({
     }
   }, [isVoiceRecording]);
 
-  // Auto-hide controls after 2 seconds of inactivity
+  // Auto-hide controls after 2.5 seconds of inactivity
   const resetControlsTimeout = useCallback(() => {
     setShowControls(true);
     if (controlsTimeoutRef.current) {
       clearTimeout(controlsTimeoutRef.current);
       controlsTimeoutRef.current = null;
     }
-    // Auto-hide after 2 seconds:
-    // - For locked non-admin users: always auto-hide after 2s of no interaction
-    // - For fullscreen playback: always auto-hide after 2s of no interaction
-    // - For active playback: auto-hide after 2s of no interaction
-    if (!canControl || isFullscreen || isPlaying) {
-      controlsTimeoutRef.current = window.setTimeout(() => {
-        setShowControls(false);
-        setShowAudioMenu(false);
-        controlsTimeoutRef.current = null;
-      }, 2000);
-    }
-  }, [canControl, isFullscreen, isPlaying]);
+    controlsTimeoutRef.current = window.setTimeout(() => {
+      setShowControls(false);
+      setShowAudioMenu(false);
+      setShowDisplayMenu(false);
+      setIsSeasonMenuOpen(false);
+      setIsEpisodeMenuOpen(false);
+      controlsTimeoutRef.current = null;
+    }, 2500);
+  }, []);
 
   const resetControlsTimeoutRef = useRef(resetControlsTimeout);
   resetControlsTimeoutRef.current = resetControlsTimeout;
@@ -612,7 +609,7 @@ function VideoPlayerComponent({
 
     const onPause = () => {
       setIsPlaying(false);
-      setShowControls(true);
+      resetControlsTimeoutRef.current?.();
 
       // Detect external/system pauses (e.g. phone calls, OS audio interruption).
       // Do not sync these unexpected system pauses to the room!
@@ -1423,7 +1420,11 @@ function VideoPlayerComponent({
 
         {/* Control Lock Notice for non-admin */}
         {!canControl && (
-          <div className="flex items-center gap-1.5 px-3 py-1 rounded-full bg-neutral-900/85 backdrop-blur-md border border-amber-500/30 text-amber-400 text-xs font-medium shadow-lg pointer-events-auto">
+          <div
+            className={`flex items-center gap-1.5 px-3 py-1 rounded-full bg-neutral-900/85 backdrop-blur-md border border-amber-500/30 text-amber-400 text-xs font-medium shadow-lg transition-opacity duration-300 pointer-events-auto ${
+              showControls ? "opacity-100" : "opacity-0 pointer-events-none"
+            }`}
+          >
             <Lock className="w-3.5 h-3.5" />
             <span>Host Locked Playback Controls</span>
           </div>
@@ -1458,65 +1459,61 @@ function VideoPlayerComponent({
         </div>
       )}
 
-      {/* Centered Large YouTube-Style Controls (only visible to controllers when showControls or paused) */}
-      <div className="absolute inset-0 z-10 flex items-center justify-center gap-6 sm:gap-10 pointer-events-none transition-opacity duration-300">
-        {/* Left: 10s Back */}
-        <button
-          onClick={(e) => {
-            e.stopPropagation();
-            if (!canControl) return;
-            seekRelative(-10);
-            resetControlsTimeout();
-          }}
-          disabled={!canControl}
-          className={`w-14 h-14 sm:w-16 sm:h-16 rounded-full bg-neutral-900/85 text-white flex flex-col items-center justify-center border border-neutral-750 shadow-xl transition pointer-events-auto relative ${
-            canControl ? "hover:bg-rose-600 hover:border-rose-500 cursor-pointer" : "opacity-40 cursor-not-allowed text-neutral-400"
-          } ${showControls ? "opacity-100 scale-100" : "opacity-0 scale-90 pointer-events-none"}`}
-          title={!canControl ? "Playback controls locked by host" : "Skip backward 10s"}
-        >
-          <RotateCcw className="w-5 h-5 sm:w-6 sm:h-6 mb-1" />
-          <span className="text-[9px] font-bold absolute bottom-2">10</span>
-        </button>
+      {/* Centered Large YouTube-Style Controls (only rendered when user can control playback) */}
+      {canControl && (
+        <div className="absolute inset-0 z-10 flex items-center justify-center gap-6 sm:gap-10 pointer-events-none transition-opacity duration-300">
+          {/* Left: 10s Back */}
+          <button
+            onClick={(e) => {
+              e.stopPropagation();
+              seekRelative(-10);
+              resetControlsTimeout();
+            }}
+            className={`w-14 h-14 sm:w-16 sm:h-16 rounded-full bg-neutral-900/85 text-white flex flex-col items-center justify-center border border-neutral-750 shadow-xl transition pointer-events-auto relative hover:bg-rose-600 hover:border-rose-500 cursor-pointer ${
+              showControls ? "opacity-100 scale-100" : "opacity-0 scale-90 pointer-events-none"
+            }`}
+            title="Skip backward 10s"
+          >
+            <RotateCcw className="w-5 h-5 sm:w-6 sm:h-6 mb-1" />
+            <span className="text-[9px] font-bold absolute bottom-2">10</span>
+          </button>
 
-        {/* Center: Play/Pause */}
-        <button
-          onClick={(e) => {
-            e.stopPropagation();
-            if (!canControl) return;
-            togglePlayPause();
-            resetControlsTimeout();
-          }}
-          disabled={!canControl}
-          className={`w-18 h-18 sm:w-20 sm:h-20 rounded-full bg-rose-600/90 text-white flex items-center justify-center shadow-2xl backdrop-blur-md transition pointer-events-auto relative ${
-            canControl ? "hover:bg-rose-500 cursor-pointer" : "opacity-40 cursor-not-allowed text-neutral-400"
-          } ${showControls || !isPlaying ? "opacity-100 scale-100" : "opacity-0 scale-90 pointer-events-none"}`}
-          title={!canControl ? "Playback controls locked by host" : (isPlaying ? "Pause (Space)" : "Play (Space)")}
-        >
-          {isPlaying ? (
-            <Pause className="w-7 h-7 sm:w-9 sm:h-9 fill-white" />
-          ) : (
-            <Play className="w-7 h-7 sm:w-9 sm:h-9 fill-white ml-1" />
-          )}
-        </button>
+          {/* Center: Play/Pause */}
+          <button
+            onClick={(e) => {
+              e.stopPropagation();
+              togglePlayPause();
+              resetControlsTimeout();
+            }}
+            className={`w-18 h-18 sm:w-20 sm:h-20 rounded-full bg-rose-600/90 text-white flex items-center justify-center shadow-2xl backdrop-blur-md transition pointer-events-auto relative hover:bg-rose-500 cursor-pointer ${
+              showControls || !isPlaying ? "opacity-100 scale-100" : "opacity-0 scale-90 pointer-events-none"
+            }`}
+            title={isPlaying ? "Pause (Space)" : "Play (Space)"}
+          >
+            {isPlaying ? (
+              <Pause className="w-7 h-7 sm:w-9 sm:h-9 fill-white" />
+            ) : (
+              <Play className="w-7 h-7 sm:w-9 sm:h-9 fill-white ml-1" />
+            )}
+          </button>
 
-        {/* Right: 10s Forward */}
-        <button
-          onClick={(e) => {
-            e.stopPropagation();
-            if (!canControl) return;
-            seekRelative(10);
-            resetControlsTimeout();
-          }}
-          disabled={!canControl}
-          className={`w-14 h-14 sm:w-16 sm:h-16 rounded-full bg-neutral-900/85 text-white flex flex-col items-center justify-center border border-neutral-750 shadow-xl transition pointer-events-auto relative ${
-            canControl ? "hover:bg-rose-600 hover:border-rose-500 cursor-pointer" : "opacity-40 cursor-not-allowed text-neutral-400"
-          } ${showControls ? "opacity-100 scale-100" : "opacity-0 scale-90 pointer-events-none"}`}
-          title={!canControl ? "Playback controls locked by host" : "Skip forward 10s"}
-        >
-          <RotateCw className="w-5 h-5 sm:w-6 sm:h-6 mb-1" />
-          <span className="text-[9px] font-bold absolute bottom-2">10</span>
-        </button>
-      </div>
+          {/* Right: 10s Forward */}
+          <button
+            onClick={(e) => {
+              e.stopPropagation();
+              seekRelative(10);
+              resetControlsTimeout();
+            }}
+            className={`w-14 h-14 sm:w-16 sm:h-16 rounded-full bg-neutral-900/85 text-white flex flex-col items-center justify-center border border-neutral-750 shadow-xl transition pointer-events-auto relative hover:bg-rose-600 hover:border-rose-500 cursor-pointer ${
+              showControls ? "opacity-100 scale-100" : "opacity-0 scale-90 pointer-events-none"
+            }`}
+            title="Skip forward 10s"
+          >
+            <RotateCw className="w-5 h-5 sm:w-6 sm:h-6 mb-1" />
+            <span className="text-[9px] font-bold absolute bottom-2">10</span>
+          </button>
+        </div>
+      )}
 
       {/* Video Controls Bar Overlay */}
       <div
@@ -1568,21 +1565,19 @@ function VideoPlayerComponent({
         <div className="flex items-center justify-between text-white text-xs gap-2 sm:gap-4">
           {/* Left: Play, Skip, Volume, Time */}
           <div className="flex items-center gap-2 sm:gap-3">
-            <button
-              onClick={(e) => {
-                e.stopPropagation();
-                if (!canControl) return;
-                togglePlayPause();
-                resetControlsTimeout();
-              }}
-              disabled={!canControl}
-              className={`p-1.5 sm:p-2 rounded-lg transition ${
-                canControl ? "hover:bg-white/15 cursor-pointer text-white" : "opacity-40 cursor-not-allowed text-neutral-400"
-              }`}
-              title={!canControl ? "Playback controls locked by host" : (isPlaying ? "Pause (Space)" : "Play (Space)")}
-            >
-              {isPlaying ? <Pause className="w-5 h-5 fill-current" /> : <Play className="w-5 h-5 fill-current ml-0.5" />}
-            </button>
+            {canControl && (
+              <button
+                onClick={(e) => {
+                  e.stopPropagation();
+                  togglePlayPause();
+                  resetControlsTimeout();
+                }}
+                className="p-1.5 sm:p-2 rounded-lg transition hover:bg-white/15 cursor-pointer text-white"
+                title={isPlaying ? "Pause (Space)" : "Play (Space)"}
+              >
+                {isPlaying ? <Pause className="w-5 h-5 fill-current" /> : <Play className="w-5 h-5 fill-current ml-0.5" />}
+              </button>
+            )}
 
             {/* Volume */}
             <div className="flex items-center gap-1.5 group/vol">
