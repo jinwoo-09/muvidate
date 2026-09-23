@@ -1,6 +1,7 @@
 package com.muvidate.app;
 
 import android.content.pm.ActivityInfo;
+import android.graphics.Color;
 import android.os.Build;
 import android.os.Bundle;
 import android.view.View;
@@ -25,18 +26,20 @@ public class MainActivity extends BridgeActivity {
             getWindow().setAttributes(lp);
         }
 
-        // Disable overscroll stretch / rubber-band effect on Android WebView
+        // Configure WebView transparency and disable overscroll
         if (getBridge() != null && getBridge().getWebView() != null) {
             getBridge().getWebView().setOverScrollMode(View.OVER_SCROLL_NEVER);
+            getBridge().getWebView().setBackgroundColor(Color.TRANSPARENT);
         }
     }
 
     @Override
     public void onResume() {
         super.onResume();
-        // Ensure overscroll mode remains disabled
+        // Ensure overscroll mode and transparency remain configured
         if (getBridge() != null && getBridge().getWebView() != null) {
             getBridge().getWebView().setOverScrollMode(View.OVER_SCROLL_NEVER);
+            getBridge().getWebView().setBackgroundColor(Color.TRANSPARENT);
         }
     }
 }

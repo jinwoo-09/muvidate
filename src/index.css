@@ -15,6 +15,16 @@
   }
 }
 
+/* Android Native Offline Player Transparency */
+html.native-offline-active,
+body.native-offline-active,
+html.native-offline-active body,
+body.native-offline-active #root,
+body.native-offline-active .app-root-container {
+  background-color: transparent !important;
+  background: transparent !important;
+}
+
 /* Custom scrollbars */
 ::-webkit-scrollbar {
   width: 6px;

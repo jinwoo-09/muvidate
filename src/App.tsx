@@ -256,7 +256,7 @@ function MainContent() {
   // If user is inside an active watch room, show the WatchRoom view
   if (activeRoomCode) {
     return (
-      <div className="min-h-screen bg-neutral-950 text-neutral-100 flex flex-col selection:bg-rose-500 selection:text-white">
+      <div className="min-h-screen bg-neutral-950 text-neutral-100 flex flex-col selection:bg-rose-500 selection:text-white app-root-container">
         <UsernameSetupModal />
         <ProfileModal
           isOpen={isProfileOpen}
@@ -272,7 +272,7 @@ function MainContent() {
   }
 
   return (
-    <div className="min-h-screen bg-neutral-950 text-neutral-100 flex flex-col selection:bg-rose-500 selection:text-white">
+    <div className="min-h-screen bg-neutral-950 text-neutral-100 flex flex-col selection:bg-rose-500 selection:text-white app-root-container">
       {/* Mandatory Onboarding Username Modal */}
       <UsernameSetupModal />
 

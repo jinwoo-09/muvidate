@@ -81,7 +81,7 @@ function VideoPlayerComponent({
   const [isMuted, setIsMuted] = useState(false);
   const [isFullscreen, setIsFullscreen] = useState(false);
 
-  const [isBuffering, setIsBuffering] = useState(true);
+  const [isBuffering, setIsBuffering] = useState(false);
   const [playbackError, setPlaybackError] = useState<string | null>(null);
   const [showControls, setShowControls] = useState(true);
   const [showAudioMenu, setShowAudioMenu] = useState(false);
@@ -277,6 +277,25 @@ function VideoPlayerComponent({
       AndroidNativeMedia.release().catch(() => {});
     };
   }, [src, isAndroidNativeOffline, updateNativeBounds]);
+
+  // Set transparent page background when native offline video is active so native PlayerView is visible
+  useEffect(() => {
+    if (!isAndroidNativeOffline) return;
+    document.documentElement.classList.add("native-offline-active");
+    document.body.classList.add("native-offline-active");
+
+    return () => {
+      document.documentElement.classList.remove("native-offline-active");
+      document.body.classList.remove("native-offline-active");
+    };
+  }, [isAndroidNativeOffline]);
+
+  // Sync displayMode ("fit", "zoom", "stretch") to native player view
+  useEffect(() => {
+    if (isAndroidNativeOffline) {
+      AndroidNativeMedia.setDisplayMode({ mode: displayMode }).catch(() => {});
+    }
+  }, [displayMode, isAndroidNativeOffline]);
 
   const [localSeason, setLocalSeason] = useState(1);
   const [localEpisode, setLocalEpisode] = useState(1);
@@ -727,13 +746,23 @@ function VideoPlayerComponent({
     const video = videoRef.current;
     if (!video) return;
 
+    // Check immediately on mount/src change: if video is paused or already ready, clear buffering
+    if (video.readyState >= 3 || video.paused) {
+      setIsBuffering(false);
+    }
+
     const onPlay = () => {
       setIsPlaying(true);
+      if (video.readyState >= 3) {
+        setIsBuffering(false);
+      }
       resetControlsTimeoutRef.current?.();
     };
 
     const onPause = () => {
       setIsPlaying(false);
+      // Immediately clear buffering on pause: a paused video must never show a buffering indicator
+      setIsBuffering(false);
       resetControlsTimeoutRef.current?.();
 
       // Detect external/system pauses (e.g. phone calls, OS audio interruption).
@@ -797,7 +826,7 @@ function VideoPlayerComponent({
     };
 
     const onWaiting = () => {
-      // Only show buffering indicator if video is not paused, not ended, and actively lacking media data
+      // Only show buffering indicator if video is playing, not ended, and actively lacking media data
       if (video && !video.paused && !video.ended && video.readyState < 3) {
         setIsBuffering(true);
         wasBufferingRef.current = true;
@@ -809,6 +838,16 @@ function VideoPlayerComponent({
         setIsBuffering(true);
         wasBufferingRef.current = true;
       }
+    };
+
+    const onSeeking = () => {
+      if (video && !video.paused && !video.ended && video.readyState < 3) {
+        setIsBuffering(true);
+      }
+    };
+
+    const onSeeked = () => {
+      setIsBuffering(false);
     };
 
     const onPlaying = () => {
@@ -929,6 +968,7 @@ function VideoPlayerComponent({
 
     const onEnded = () => {
       setIsPlaying(false);
+      setIsBuffering(false);
       if (onVideoEndedRef.current) onVideoEndedRef.current();
     };
 
@@ -939,6 +979,8 @@ function VideoPlayerComponent({
     video.addEventListener("loadeddata", onLoadedData);
     video.addEventListener("waiting", onWaiting);
     video.addEventListener("stalled", onStalled);
+    video.addEventListener("seeking", onSeeking);
+    video.addEventListener("seeked", onSeeked);
     video.addEventListener("playing", onPlaying);
     video.addEventListener("canplay", onCanPlay);
     video.addEventListener("canplaythrough", onCanPlayThrough);
@@ -947,6 +989,8 @@ function VideoPlayerComponent({
     video.addEventListener("ended", onEnded);
 
     return () => {
+      setIsBuffering(false);
+      wasBufferingRef.current = false;
       video.removeEventListener("play", onPlay);
       video.removeEventListener("pause", onPause);
       video.removeEventListener("timeupdate", onTimeUpdate);
@@ -954,6 +998,8 @@ function VideoPlayerComponent({
       video.removeEventListener("loadeddata", onLoadedData);
       video.removeEventListener("waiting", onWaiting);
       video.removeEventListener("stalled", onStalled);
+      video.removeEventListener("seeking", onSeeking);
+      video.removeEventListener("seeked", onSeeked);
       video.removeEventListener("playing", onPlaying);
       video.removeEventListener("canplay", onCanPlay);
       video.removeEventListener("canplaythrough", onCanPlayThrough);

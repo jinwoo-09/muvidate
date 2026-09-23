@@ -4,6 +4,7 @@ import android.app.Activity;
 import android.content.ContentResolver;
 import android.content.Intent;
 import android.database.Cursor;
+import android.graphics.Color;
 import android.media.MediaMetadataRetriever;
 import android.net.Uri;
 import android.os.Build;
@@ -246,26 +247,30 @@ public class AndroidNativeMediaPlugin extends Plugin {
             ViewGroup.LayoutParams.MATCH_PARENT,
             ViewGroup.LayoutParams.MATCH_PARENT
         ));
+        playerContainer.setBackgroundColor(Color.TRANSPARENT);
         playerContainer.setVisibility(View.GONE);
 
         playerView = new PlayerView(activity);
         playerView.setUseController(false); // Controlled via MuviDate UI overlays & sync engine
         playerView.setResizeMode(AspectRatioFrameLayout.RESIZE_MODE_FIT);
+        playerView.setShutterBackgroundColor(Color.TRANSPARENT);
+        playerView.setBackgroundColor(Color.TRANSPARENT);
         
         FrameLayout.LayoutParams lp = new FrameLayout.LayoutParams(
             ViewGroup.LayoutParams.MATCH_PARENT,
             ViewGroup.LayoutParams.MATCH_PARENT
         );
+        lp.gravity = Gravity.TOP | Gravity.START;
         playerView.setLayoutParams(lp);
 
         playerContainer.addView(playerView);
 
-        // Add player view behind or inside the activity content
+        // Add player view behind the activity content
         root.addView(playerContainer, 0);
 
         // Ensure WebView background is transparent so native player underneath is visible
         if (getBridge() != null && getBridge().getWebView() != null) {
-            getBridge().getWebView().setBackgroundColor(0x00000000);
+            getBridge().getWebView().setBackgroundColor(Color.TRANSPARENT);
         }
     }
 
@@ -309,6 +314,7 @@ public class AndroidNativeMediaPlugin extends Plugin {
                     ViewGroup.LayoutParams.MATCH_PARENT,
                     ViewGroup.LayoutParams.MATCH_PARENT
                 );
+                fullLp.gravity = Gravity.TOP | Gravity.START;
                 playerView.setLayoutParams(fullLp);
                 playerView.setTranslationX(0);
                 playerView.setTranslationY(0);
@@ -319,6 +325,7 @@ public class AndroidNativeMediaPlugin extends Plugin {
                 int pixelY = (int) Math.round(y * density);
 
                 FrameLayout.LayoutParams inlineLp = new FrameLayout.LayoutParams(pixelWidth, pixelHeight);
+                inlineLp.gravity = Gravity.TOP | Gravity.START;
                 playerView.setLayoutParams(inlineLp);
                 playerView.setTranslationX(pixelX);
                 playerView.setTranslationY(pixelY);
