@@ -104,13 +104,48 @@ function MainContent() {
   const [preselectedMovieForRoom, setPreselectedMovieForRoom] = useState<Movie | null>(null);
   const [movieToEdit, setMovieToEdit] = useState<Movie | null>(null);
 
-  // Parse room code from URL if present (e.g. ?room=1234 or #1234)
-  useEffect(() => {
-    const params = new URLSearchParams(window.location.search);
-    const roomFromQuery = params.get("room");
-    if (roomFromQuery && /^\d{4}$/.test(roomFromQuery)) {
-      setActiveRoomCode(roomFromQuery);
+  // Helper to extract room code from URL (supporting query params and hash for WebView/Capacitor compatibility)
+  const extractRoomCodeFromUrl = () => {
+    try {
+      const params = new URLSearchParams(window.location.search);
+      let room = params.get("room");
+      if (!room && window.location.hash) {
+        const hash = window.location.hash.replace(/^#\/?/, "");
+        if (/^\d{4}$/.test(hash)) {
+          room = hash;
+        } else {
+          const hashQuery = hash.includes("?") ? hash.split("?")[1] : hash;
+          const hashParams = new URLSearchParams(hashQuery);
+          const hashRoom = hashParams.get("room");
+          if (hashRoom && /^\d{4}$/.test(hashRoom)) {
+            room = hashRoom;
+          }
+        }
+      }
+      return room && /^\d{4}$/.test(room) ? room : null;
+    } catch {
+      return null;
     }
+  };
+
+  // Parse room code from URL if present (e.g. ?room=1234 or #1234) and handle device back navigation
+  useEffect(() => {
+    const initialRoom = extractRoomCodeFromUrl();
+    if (initialRoom) {
+      setActiveRoomCode(initialRoom);
+    }
+
+    const handleUrlChange = () => {
+      const room = extractRoomCodeFromUrl();
+      setActiveRoomCode(room);
+    };
+
+    window.addEventListener("popstate", handleUrlChange);
+    window.addEventListener("hashchange", handleUrlChange);
+    return () => {
+      window.removeEventListener("popstate", handleUrlChange);
+      window.removeEventListener("hashchange", handleUrlChange);
+    };
   }, []);
 
   // Listen to Firestore movie collection

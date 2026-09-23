@@ -1,0 +1,7 @@
+<?xml version='1.0' encoding='utf-8'?>
+<resources>
+    <string name="app_name">MuviDate</string>
+    <string name="title_activity_main">MuviDate</string>
+    <string name="package_name">com.muvidate.app</string>
+    <string name="custom_url_scheme">com.muvidate.app</string>
+</resources>

@@ -20,9 +20,12 @@ import {
   ChevronDown,
   Subtitles
 } from "lucide-react";
+import { Capacitor } from "@capacitor/core";
+import { App as CapApp } from "@capacitor/app";
 import { rtdb } from "../lib/firebase";
 import { ref, onChildAdded, off, get } from "firebase/database";
 import { SeriesStructure, extractSeriesStructure, getEpisodeUrl, getSubtitleForEpisode, convertSrtToVtt } from "../lib/seriesUtils";
+import { isAndroidNative, enterNativeFullscreen, exitNativeFullscreen } from "../lib/nativeBridge";
 
 export interface VideoPlayerProps {
   src: string;
@@ -840,6 +843,11 @@ function VideoPlayerComponent({
 
   // Screen Orientation helpers for mobile fullscreen
   const lockLandscapeOrientation = async () => {
+    if (isAndroidNative()) {
+      enterNativeFullscreen();
+      return;
+    }
+
     try {
       const orientation =
         window.screen?.orientation ||
@@ -863,6 +871,11 @@ function VideoPlayerComponent({
   };
 
   const unlockScreenOrientation = () => {
+    if (isAndroidNative()) {
+      exitNativeFullscreen();
+      return;
+    }
+
     try {
       const orientation =
         window.screen?.orientation ||
@@ -1211,6 +1224,29 @@ function VideoPlayerComponent({
       }
     }
   };
+
+  // Android hardware back button handler: if video is in fullscreen, exit fullscreen first
+  useEffect(() => {
+    if (!Capacitor.isNativePlatform()) return;
+
+    let backHandle: { remove: () => void } | null = null;
+
+    if (isFullscreen) {
+      CapApp.addListener("backButton", () => {
+        if (isFullscreenRef.current) {
+          toggleFullscreen();
+        }
+      }).then((handle) => {
+        backHandle = handle;
+      });
+    }
+
+    return () => {
+      if (backHandle) {
+        backHandle.remove();
+      }
+    };
+  }, [isFullscreen]);
 
   const formatTime = (seconds: number) => {
     if (isNaN(seconds) || !isFinite(seconds)) return "00:00";
