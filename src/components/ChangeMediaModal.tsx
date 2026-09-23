@@ -3,8 +3,9 @@ import { useAuth } from "../context/AuthContext";
 import { rtdb, subscribeToMovies } from "../lib/firebase";
 import { ref, update } from "firebase/database";
 import { Movie } from "../types";
-import { getVideoDuration } from "../lib/videoUtils";
+import { getVideoDuration, formatVideoTime } from "../lib/videoUtils";
 import { extractSeriesStructure } from "../lib/seriesUtils";
+import { isAndroidNative, pickOfflineNativeVideo, OfflineNativeVideoResult } from "../lib/nativeBridge";
 import { 
   X, 
   Film, 
@@ -17,7 +18,8 @@ import {
   Sparkles,
   RefreshCw,
   Video,
-  Smartphone
+  Smartphone,
+  FolderOpen
 } from "lucide-react";
 
 interface ChangeMediaModalProps {
@@ -27,10 +29,8 @@ interface ChangeMediaModalProps {
   currentMovieTitle?: string;
   isHost: boolean;
   controlsLocked: boolean;
-  onOfflineFileSelected?: (file: File) => void;
+  onOfflineFileSelected?: (file: File | OfflineNativeVideoResult) => void;
 }
-
-const MAX_MOVIE_SIZE = 1024 * 1024 * 1024; // 1 GB
 
 export function ChangeMediaModal({
   isOpen,
@@ -58,6 +58,8 @@ export function ChangeMediaModal({
 
   // Offline video state
   const [offlineFile, setOfflineFile] = useState<File | null>(null);
+  const [offlineNativeData, setOfflineNativeData] = useState<OfflineNativeVideoResult | null>(null);
+  const [isPickingNative, setIsPickingNative] = useState(false);
 
   // Submitting state & Error
   const [isUpdating, setIsUpdating] = useState(false);
@@ -170,24 +172,37 @@ export function ChangeMediaModal({
         movieUrl = trimmedUrl;
         movieSource = "direct";
       } else if (activeSourceTab === "offline") {
-        if (!offlineFile) {
-          setError("Please choose a local video file from your device.");
-          setIsUpdating(false);
-          return;
-        }
+        if (isAndroidNative()) {
+          if (!offlineNativeData) {
+            setError("Please choose a local video file from your Android storage.");
+            setIsUpdating(false);
+            return;
+          }
+          offlineDuration = offlineNativeData.duration;
+          movieTitle = offlineNativeData.name.replace(/\.[^/.]+$/, "");
+          offlineFileName = offlineNativeData.name;
+          movieUrl = offlineNativeData.uri;
+          movieSource = "offline";
+        } else {
+          if (!offlineFile) {
+            setError("Please choose a local video file from your device.");
+            setIsUpdating(false);
+            return;
+          }
 
-        try {
-          offlineDuration = await getVideoDuration(offlineFile);
-        } catch (durErr: any) {
-          setError(durErr.message || "This device/browser cannot play or decode this video format.");
-          setIsUpdating(false);
-          return;
-        }
+          try {
+            offlineDuration = await getVideoDuration(offlineFile);
+          } catch (durErr: any) {
+            setError(durErr.message || "This device/browser cannot play or decode this video format.");
+            setIsUpdating(false);
+            return;
+          }
 
-        movieTitle = offlineFile.name.replace(/\.[^/.]+$/, "");
-        offlineFileName = offlineFile.name;
-        movieUrl = `offline://${offlineFile.name}`;
-        movieSource = "offline";
+          movieTitle = offlineFile.name.replace(/\.[^/.]+$/, "");
+          offlineFileName = offlineFile.name;
+          movieUrl = `offline://${offlineFile.name}`;
+          movieSource = "offline";
+        }
       }
 
       const now = Date.now();
@@ -284,9 +299,10 @@ export function ChangeMediaModal({
       await update(roomRef, updateData);
 
       // If offline video selected, update local state & participant record
-      if (activeSourceTab === "offline" && offlineFile) {
-        if (onOfflineFileSelected) {
-          onOfflineFileSelected(offlineFile);
+      if (activeSourceTab === "offline") {
+        const passOffline = isAndroidNative() ? (offlineNativeData || undefined) : (offlineFile || undefined);
+        if (passOffline && onOfflineFileSelected) {
+          onOfflineFileSelected(passOffline);
         }
         const participantRef = ref(rtdb, `rooms/${roomCode}/participants/${user.uid}`);
         await update(participantRef, { hasOfflineFile: true }).catch(() => {});
@@ -529,42 +545,98 @@ export function ChangeMediaModal({
                 </p>
               </div>
 
-              <div>
-                <label className="block text-[11px] font-semibold uppercase tracking-wider text-neutral-400 mb-1.5">
-                  Select Local Video File *
-                </label>
-                <input
-                  type="file"
-                  accept="video/*,.mp4,.mkv,.mov,.avi,.webm,.m4v,.flv,.wmv,.3gp,.ts,.m2ts"
-                  onChange={(e) => {
-                    const file = e.target.files?.[0];
-                    if (!file) return;
-                    setError(null);
-                    setOfflineFile(file);
-                  }}
-                  className="w-full text-xs text-neutral-400 file:mr-3 file:py-1.5 file:px-3 file:rounded-lg file:border-0 file:text-xs file:font-semibold file:bg-neutral-800 file:text-white hover:file:bg-neutral-700 cursor-pointer"
-                />
-              </div>
+              {isAndroidNative() ? (
+                <div className="space-y-2">
+                  <label className="block text-[11px] font-semibold uppercase tracking-wider text-neutral-400">
+                    Select Local Video File (Android Media3) *
+                  </label>
+                  <button
+                    type="button"
+                    onClick={async () => {
+                      setError(null);
+                      setIsPickingNative(true);
+                      try {
+                        const res = await pickOfflineNativeVideo();
+                        setOfflineNativeData(res);
+                      } catch (err: any) {
+                        if (err.message !== "USER_CANCELLED" && !err.message?.includes("CANCELLED")) {
+                          setError(err.message || "Failed to select video file from Android storage.");
+                        }
+                      } finally {
+                        setIsPickingNative(false);
+                      }
+                    }}
+                    disabled={isPickingNative}
+                    className="w-full py-3 px-4 rounded-xl bg-neutral-950 hover:bg-neutral-850 border border-neutral-700 hover:border-rose-500/50 text-white text-xs font-semibold flex items-center justify-center gap-2 transition shadow-sm"
+                  >
+                    {isPickingNative ? (
+                      <>
+                        <Loader2 className="w-4 h-4 animate-spin text-rose-500" />
+                        <span>Opening Android Storage...</span>
+                      </>
+                    ) : (
+                      <>
+                        <FolderOpen className="w-4 h-4 text-rose-400" />
+                        <span>{offlineNativeData ? "Change Selected Video" : "Choose Video from Device (SAF)"}</span>
+                      </>
+                    )}
+                  </button>
+                </div>
+              ) : (
+                <div>
+                  <label className="block text-[11px] font-semibold uppercase tracking-wider text-neutral-400 mb-1.5">
+                    Select Local Video File *
+                  </label>
+                  <input
+                    type="file"
+                    accept="video/*,.mp4,.mkv,.mov,.avi,.webm,.m4v,.flv,.wmv,.3gp,.ts,.m2ts"
+                    onChange={(e) => {
+                      const file = e.target.files?.[0];
+                      if (!file) return;
+                      setError(null);
+                      setOfflineFile(file);
+                    }}
+                    className="w-full text-xs text-neutral-400 file:mr-3 file:py-1.5 file:px-3 file:rounded-lg file:border-0 file:text-xs file:font-semibold file:bg-neutral-800 file:text-white hover:file:bg-neutral-700 cursor-pointer"
+                  />
+                </div>
+              )}
 
-              <div className="p-3 bg-emerald-500/10 border border-emerald-500/30 rounded-xl text-[11px] flex flex-col gap-1.5 mt-2">
-                <p className="font-semibold text-emerald-400 flex items-center gap-1.5">
-                  <Smartphone className="w-4 h-4 shrink-0 text-emerald-400" />
-                  Using Android?
-                </p>
-                <p className="text-neutral-300 leading-relaxed">
-                  Android Chrome has limited video codec support. For the best playback experience and codec compatibility, we highly recommend downloading and installing our native Android app:
-                </p>
-                <a
-                  href="https://github.com/jinwoo-09/muvidate/releases/download/1.0/Muvidate_1.0.apk"
-                  target="_blank"
-                  rel="noopener noreferrer"
-                  className="text-emerald-400 hover:text-emerald-300 font-semibold underline break-all"
-                >
-                  https://github.com/jinwoo-09/muvidate/releases/download/1.0/Muvidate_1.0.apk
-                </a>
-              </div>
+              {!isAndroidNative() && (
+                <div className="p-3 bg-emerald-500/10 border border-emerald-500/30 rounded-xl text-[11px] flex flex-col gap-1.5 mt-2">
+                  <p className="font-semibold text-emerald-400 flex items-center gap-1.5">
+                    <Smartphone className="w-4 h-4 shrink-0 text-emerald-400" />
+                    Using Android?
+                  </p>
+                  <p className="text-neutral-300 leading-relaxed">
+                    Android Chrome has limited video codec support. For the best playback experience and codec compatibility, we highly recommend downloading and installing our native Android app:
+                  </p>
+                  <a
+                    href="https://github.com/jinwoo-09/muvidate/releases/download/1.0/Muvidate_1.0.apk"
+                    target="_blank"
+                    rel="noopener noreferrer"
+                    className="text-emerald-400 hover:text-emerald-300 font-semibold underline break-all"
+                  >
+                    https://github.com/jinwoo-09/muvidate/releases/download/1.0/Muvidate_1.0.apk
+                  </a>
+                </div>
+              )}
 
-              {offlineFile && (
+              {offlineNativeData && (
+                <div className="p-2.5 bg-neutral-950 border border-neutral-800 rounded-xl flex items-center justify-between">
+                  <div className="truncate">
+                    <p className="text-xs font-semibold text-white truncate">{offlineNativeData.name}</p>
+                    <p className="text-[10px] text-neutral-400">
+                      {(offlineNativeData.size / (1024 * 1024)).toFixed(1)} MB
+                      {offlineNativeData.duration > 0 && ` • ${formatVideoTime(offlineNativeData.duration)}`}
+                    </p>
+                  </div>
+                  <span className="text-[10px] px-2 py-0.5 bg-emerald-500/20 text-emerald-300 rounded-md font-medium">
+                    Media3 Ready
+                  </span>
+                </div>
+              )}
+
+              {offlineFile && !isAndroidNative() && (
                 <div className="p-2.5 bg-neutral-950 border border-neutral-800 rounded-xl flex items-center justify-between">
                   <div className="truncate">
                     <p className="text-xs font-semibold text-white truncate">{offlineFile.name}</p>

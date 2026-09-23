@@ -12,6 +12,7 @@ public class MainActivity extends BridgeActivity {
     @Override
     public void onCreate(Bundle savedInstanceState) {
         registerPlugin(AndroidFullScreenPlugin.class);
+        registerPlugin(AndroidNativeMediaPlugin.class);
         super.onCreate(savedInstanceState);
 
         // App is portrait-only by default for all normal browsing & usage

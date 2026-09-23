@@ -25,7 +25,7 @@ import { App as CapApp } from "@capacitor/app";
 import { rtdb } from "../lib/firebase";
 import { ref, onChildAdded, off, get } from "firebase/database";
 import { SeriesStructure, extractSeriesStructure, getEpisodeUrl, getSubtitleForEpisode, convertSrtToVtt } from "../lib/seriesUtils";
-import { isAndroidNative, enterNativeFullscreen, exitNativeFullscreen } from "../lib/nativeBridge";
+import { isAndroidNative, enterNativeFullscreen, exitNativeFullscreen, AndroidNativeMedia } from "../lib/nativeBridge";
 
 export interface VideoPlayerProps {
   src: string;
@@ -187,6 +187,96 @@ function VideoPlayerComponent({
     if (propSeriesStructure) return propSeriesStructure;
     return extractSeriesStructure(src);
   }, [propSeriesStructure, src]);
+
+  const isAndroidNativeOffline = React.useMemo(() => {
+    return isAndroidNative() && (
+      src.startsWith("content://") ||
+      src.startsWith("file://") ||
+      src.startsWith("offline://")
+    );
+  }, [src]);
+
+  const updateNativeBounds = useCallback(() => {
+    if (!containerRef.current || !isAndroidNativeOffline) return;
+    const rect = containerRef.current.getBoundingClientRect();
+    const density = window.devicePixelRatio || 1;
+    AndroidNativeMedia.updatePlayerBounds({
+      x: Math.round(rect.left * density),
+      y: Math.round(rect.top * density),
+      width: Math.round(rect.width * density),
+      height: Math.round(rect.height * density),
+      visible: true,
+      isFullscreen: isFullscreenRef.current
+    }).catch(() => {});
+  }, [isAndroidNativeOffline]);
+
+  // Native Android Media3 playback lifecycle
+  useEffect(() => {
+    if (!isAndroidNativeOffline) return;
+    let isMounted = true;
+    let stateListener: any = null;
+    let endListener: any = null;
+    let errorListener: any = null;
+
+    const init = async () => {
+      try {
+        setIsBuffering(true);
+        setPlaybackError(null);
+        await AndroidNativeMedia.setupPlayer({
+          uri: src,
+          position: syncState?.currentTime || 0,
+          autoPlay: syncState?.isPlaying || false
+        });
+
+        stateListener = await AndroidNativeMedia.addListener("nativePlayerStateChange", (data) => {
+          if (!isMounted) return;
+          setIsPlaying(data.isPlaying);
+          setCurrentTime(data.currentTime);
+          if (data.duration > 0) setDuration(data.duration);
+          setIsBuffering(data.isBuffering);
+        });
+
+        endListener = await AndroidNativeMedia.addListener("nativeVideoEnded", () => {
+          if (!isMounted) return;
+          setIsPlaying(false);
+          if (onVideoEndedRef.current) onVideoEndedRef.current();
+        });
+
+        errorListener = await AndroidNativeMedia.addListener("nativeVideoError", () => {
+          if (!isMounted) return;
+          setIsBuffering(false);
+          setPlaybackError("This video codec or audio track is not supported by this Android device.");
+        });
+
+        updateNativeBounds();
+      } catch (err: any) {
+        console.error("Native player setup error:", err);
+        setPlaybackError("Failed to initialize Android native media player.");
+        setIsBuffering(false);
+      }
+    };
+
+    init();
+
+    const handleBoundsUpdate = () => {
+      updateNativeBounds();
+    };
+
+    window.addEventListener("resize", handleBoundsUpdate);
+    window.addEventListener("scroll", handleBoundsUpdate, { passive: true });
+    const interval = setInterval(handleBoundsUpdate, 500);
+
+    return () => {
+      isMounted = false;
+      window.removeEventListener("resize", handleBoundsUpdate);
+      window.removeEventListener("scroll", handleBoundsUpdate);
+      clearInterval(interval);
+      stateListener?.remove();
+      endListener?.remove();
+      errorListener?.remove();
+      AndroidNativeMedia.release().catch(() => {});
+    };
+  }, [src, isAndroidNativeOffline, updateNativeBounds]);
 
   const [localSeason, setLocalSeason] = useState(1);
   const [localEpisode, setLocalEpisode] = useState(1);
@@ -535,7 +625,39 @@ function VideoPlayerComponent({
       audioTrackIndex: syncState.audioTrackIndex
     };
 
-    // Calculate expected playback time accounting for elapsed seconds since sync event was dispatched
+    // Handle Android Native Media3 offline playback sync
+    if (isAndroidNativeOffline) {
+      const now = Date.now();
+      const elapsed = syncState.isPlaying && syncState.lastUpdated
+        ? Math.max(0, (now - syncState.lastUpdated) / 1000)
+        : 0;
+      const expectedTime = syncState.isPlaying
+        ? Math.max(0, syncState.currentTime + elapsed)
+        : syncState.currentTime;
+
+      let hasMeaningfulSync = false;
+      const timeDiff = Math.abs(currentTime - expectedTime);
+      if (isInitialSync || timeDiff > 1.5) {
+        AndroidNativeMedia.seekTo({ position: expectedTime });
+        setCurrentTime(expectedTime);
+        hasMeaningfulSync = true;
+      }
+
+      if (syncState.isPlaying && !isPlaying) {
+        AndroidNativeMedia.play();
+        setIsPlaying(true);
+        hasMeaningfulSync = true;
+      } else if (!syncState.isPlaying && isPlaying) {
+        AndroidNativeMedia.pause();
+        setIsPlaying(false);
+        hasMeaningfulSync = true;
+      }
+
+      if (hasMeaningfulSync) {
+        triggerSyncIndicator();
+      }
+      return;
+    }
     const now = Date.now();
     const elapsed = syncState.isPlaying && syncState.lastUpdated
       ? Math.max(0, (now - syncState.lastUpdated) / 1000)
@@ -1076,8 +1198,24 @@ function VideoPlayerComponent({
   };
 
   const togglePlayPause = async () => {
+    if (!canControl) return;
+
+    if (isAndroidNativeOffline) {
+      isUserIntentionalActionRef.current = true;
+      if (isPlaying) {
+        AndroidNativeMedia.pause();
+        setIsPlaying(false);
+        emitPlaybackState(false, currentTime);
+      } else {
+        AndroidNativeMedia.play();
+        setIsPlaying(true);
+        emitPlaybackState(true, currentTime);
+      }
+      return;
+    }
+
     const video = videoRef.current;
-    if (!video || !canControl) return;
+    if (!video) return;
 
     if (video.paused) {
       // If resuming after a system interruption, fetch the latest timeline from RTDB before playing
@@ -1120,12 +1258,18 @@ function VideoPlayerComponent({
   };
 
   const seekRelative = (seconds: number) => {
-    const video = videoRef.current;
-    if (!video || !canControl) return;
+    if (!canControl) return;
     isUserIntentionalActionRef.current = true;
-    const target = Math.max(0, Math.min(video.duration || 0, video.currentTime + seconds));
-    video.currentTime = target;
+    const target = Math.max(0, Math.min(duration || 0, currentTime + seconds));
     setCurrentTime(target);
+    if (isAndroidNativeOffline) {
+      AndroidNativeMedia.seekTo({ position: target });
+      emitPlaybackState(isPlaying, target);
+      return;
+    }
+    const video = videoRef.current;
+    if (!video) return;
+    video.currentTime = target;
     emitPlaybackState(!video.paused, target);
   };
 
@@ -1144,6 +1288,11 @@ function VideoPlayerComponent({
     if (!canControl) return;
     isSeekingRef.current = false;
     isUserIntentionalActionRef.current = true;
+    if (isAndroidNativeOffline) {
+      AndroidNativeMedia.seekTo({ position: currentTime });
+      emitPlaybackState(isPlaying, currentTime);
+      return;
+    }
     const video = videoRef.current;
     if (video) {
       video.currentTime = currentTime;
@@ -1154,18 +1303,24 @@ function VideoPlayerComponent({
   const handleVolumeChange = (e: React.ChangeEvent<HTMLInputElement>) => {
     const val = Number(e.target.value);
     setVolume(val);
-    if (videoRef.current) {
+    const nextMuted = val === 0;
+    setIsMuted(nextMuted);
+    if (isAndroidNativeOffline) {
+      AndroidNativeMedia.setVolume({ volume: nextMuted ? 0 : val });
+    } else if (videoRef.current) {
       videoRef.current.volume = val;
-      videoRef.current.muted = val === 0;
-      setIsMuted(val === 0);
+      videoRef.current.muted = nextMuted;
     }
   };
 
   const toggleMute = () => {
-    if (!videoRef.current) return;
     const nextMuted = !isMuted;
-    videoRef.current.muted = nextMuted;
     setIsMuted(nextMuted);
+    if (isAndroidNativeOffline) {
+      AndroidNativeMedia.setVolume({ volume: nextMuted ? 0 : volume });
+    } else if (videoRef.current) {
+      videoRef.current.muted = nextMuted;
+    }
     resetControlsTimeout();
   };
 
@@ -1301,24 +1456,31 @@ function VideoPlayerComponent({
           resetControlsTimeout();
         }
       }}
-      className="relative w-full aspect-video bg-black rounded-2xl overflow-hidden group select-none shadow-2xl border border-neutral-800 flex items-center justify-center"
+      className={`relative w-full aspect-video ${isAndroidNativeOffline ? "bg-transparent" : "bg-black"} rounded-2xl overflow-hidden group select-none shadow-2xl border border-neutral-800 flex items-center justify-center`}
     >
-      {/* HTML5 Video Element */}
-      <video
-        ref={videoRef}
-        src={src}
-        poster={poster}
-        playsInline
-        preload="metadata"
-        className={`w-full h-full cursor-pointer ${
-          displayMode === "fit"
-            ? "object-contain"
-            : displayMode === "zoom"
-              ? "object-cover"
-              : "object-fill"
-        }`}
-        onClick={handleVideoClick}
-      />
+      {/* HTML5 Video Element / Native Android Player Overlay */}
+      {isAndroidNativeOffline ? (
+        <div
+          className="w-full h-full cursor-pointer bg-transparent"
+          onClick={handleVideoClick}
+        />
+      ) : (
+        <video
+          ref={videoRef}
+          src={src}
+          poster={poster}
+          playsInline
+          preload="metadata"
+          className={`w-full h-full cursor-pointer ${
+            displayMode === "fit"
+              ? "object-contain"
+              : displayMode === "zoom"
+                ? "object-cover"
+                : "object-fill"
+          }`}
+          onClick={handleVideoClick}
+        />
+      )}
 
       {/* Buffering Indicator */}
       {isBuffering && !playbackError && (
@@ -1339,7 +1501,15 @@ function VideoPlayerComponent({
           <button
             onClick={() => {
               setPlaybackError(null);
-              videoRef.current?.load();
+              if (isAndroidNativeOffline) {
+                AndroidNativeMedia.setupPlayer({
+                  uri: src,
+                  position: currentTime,
+                  autoPlay: true
+                });
+              } else {
+                videoRef.current?.load();
+              }
             }}
             className="px-4 py-2 bg-rose-600 hover:bg-rose-500 text-white rounded-xl text-xs font-semibold transition"
           >

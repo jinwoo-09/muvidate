@@ -27,7 +27,7 @@ import {
   Download,
   Loader2
 } from "lucide-react";
-import { openDeveloperInstagram, isAndroidNative } from "./lib/nativeBridge";
+import { openDeveloperInstagram, isAndroidNative, OfflineNativeVideoResult } from "./lib/nativeBridge";
 
 function MainContent() {
   const { loading: authLoading, profile, user } = useAuth();
@@ -94,7 +94,7 @@ function MainContent() {
 
   // Navigation / Active View
   const [activeRoomCode, setActiveRoomCode] = useState<string | null>(null);
-  const [activeOfflineFile, setActiveOfflineFile] = useState<File | undefined>(undefined);
+  const [activeOfflineFile, setActiveOfflineFile] = useState<File | OfflineNativeVideoResult | undefined>(undefined);
 
   // Modals
   const [isCreateRoomOpen, setIsCreateRoomOpen] = useState(false);
@@ -234,7 +234,7 @@ function MainContent() {
     setIsCreateRoomOpen(true);
   };
 
-  const handleRoomCreated = (roomCode: string, offlineFile?: File) => {
+  const handleRoomCreated = (roomCode: string, offlineFile?: File | OfflineNativeVideoResult) => {
     setIsCreateRoomOpen(false);
     setActiveOfflineFile(offlineFile);
     setActiveRoomCode(roomCode);
