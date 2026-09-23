@@ -827,7 +827,7 @@ export function WatchRoom({ roomCode, initialOfflineFile, onLeaveRoom }: WatchRo
               )}
               <input
                 type="file"
-                accept="video/*"
+                accept="video/*,.mp4,.mkv,.mov,.avi,.webm,.m4v,.flv,.wmv,.3gp,.ts,.m2ts"
                 disabled={isExtractingDuration}
                 className="hidden"
                 onChange={handleOfflineFileSelect}

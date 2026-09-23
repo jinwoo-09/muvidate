@@ -19,7 +19,7 @@ export function getVideoDuration(file: File): Promise<number> {
 
     let timeoutId: number | null = window.setTimeout(() => {
       cleanup();
-      reject(new Error("Timed out reading video duration. Android Chrome cannot decode this video's codec."));
+      reject(new Error("Timed out reading video metadata. Your device's media decoder could not decode this video track."));
     }, 10000);
 
     const cleanup = () => {
@@ -36,7 +36,7 @@ export function getVideoDuration(file: File): Promise<number> {
       const duration = video.duration;
       cleanup();
       if (isNaN(duration) || !isFinite(duration) || duration <= 0) {
-        reject(new Error("Android Chrome cannot decode this video's codec. Please select a video encoded with a codec supported by your device."));
+        reject(new Error("Your device's media decoder could not decode this video codec. Please select a video encoded with a codec supported by your device."));
       } else {
         resolve(duration);
       }
@@ -44,7 +44,7 @@ export function getVideoDuration(file: File): Promise<number> {
 
     video.onerror = () => {
       cleanup();
-      reject(new Error("Android Chrome cannot decode this video's codec. Please select a video encoded with a codec supported by your device."));
+      reject(new Error("Your device's media decoder could not decode this video codec. Please select a video encoded with a codec supported by your device."));
     };
   });
 }

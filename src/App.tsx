@@ -27,6 +27,7 @@ import {
   Download,
   Loader2
 } from "lucide-react";
+import { openDeveloperInstagram, isAndroidNative } from "./lib/nativeBridge";
 
 function MainContent() {
   const { loading: authLoading, profile, user } = useAuth();
@@ -547,6 +548,12 @@ function MainContent() {
               href="https://www.instagram.com/ashuuxoo"
               target="_blank"
               rel="noopener noreferrer"
+              onClick={(e) => {
+                if (isAndroidNative()) {
+                  e.preventDefault();
+                  openDeveloperInstagram("ashuuxoo");
+                }
+              }}
               className="inline-flex items-center gap-1.5 px-3 py-1 rounded-full bg-neutral-900 hover:bg-neutral-850 text-neutral-300 hover:text-rose-400 border border-neutral-800 hover:border-rose-500/40 transition shadow-sm group"
               title="Visit Developer's Instagram: Ashuuxoo"
             >

@@ -1,6 +1,8 @@
 package com.muvidate.app;
 
+import android.content.Intent;
 import android.content.pm.ActivityInfo;
+import android.net.Uri;
 import android.os.Build;
 import android.view.Window;
 import android.view.WindowManager;
@@ -92,5 +94,38 @@ public class AndroidFullScreenPlugin extends Plugin {
         JSObject ret = new JSObject();
         ret.put("isNative", true);
         call.resolve(ret);
+    }
+
+    @PluginMethod
+    public void openInstagram(PluginCall call) {
+        String username = call.getString("username", "ashuuxoo");
+        if (getActivity() == null) {
+            call.reject("Activity is null");
+            return;
+        }
+
+        getActivity().runOnUiThread(() -> {
+            try {
+                // 1. Try native Instagram app intent
+                Uri appUri = Uri.parse("http://instagram.com/_u/" + username);
+                Intent appIntent = new Intent(Intent.ACTION_VIEW, appUri);
+                appIntent.setPackage("com.instagram.android");
+                appIntent.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK);
+
+                try {
+                    getContext().startActivity(appIntent);
+                    call.resolve();
+                } catch (Exception notInstalled) {
+                    // 2. Fallback to system browser
+                    Uri webUri = Uri.parse("https://www.instagram.com/" + username);
+                    Intent webIntent = new Intent(Intent.ACTION_VIEW, webUri);
+                    webIntent.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK);
+                    getContext().startActivity(webIntent);
+                    call.resolve();
+                }
+            } catch (Exception e) {
+                call.reject(e.getMessage());
+            }
+        });
     }
 }

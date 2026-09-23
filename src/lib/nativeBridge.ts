@@ -4,6 +4,7 @@ export interface AndroidFullScreenPlugin {
   enterVideoFullscreen(): Promise<void>;
   exitVideoFullscreen(): Promise<void>;
   isNative(): Promise<{ isNative: boolean }>;
+  openInstagram(options?: { username?: string }): Promise<void>;
 }
 
 export const AndroidFullScreen = registerPlugin<AndroidFullScreenPlugin>("AndroidFullScreen");
@@ -46,4 +47,21 @@ export const exitNativeFullscreen = async (): Promise<void> => {
   } catch (err) {
     console.warn("exitNativeFullscreen failed:", err);
   }
+};
+
+/**
+ * Open developer Instagram profile outside the WebView.
+ * Tries native Instagram application first; falls back to system browser.
+ */
+export const openDeveloperInstagram = async (username: string = "ashuuxoo"): Promise<void> => {
+  if (isAndroidNative()) {
+    try {
+      await AndroidFullScreen.openInstagram({ username });
+      return;
+    } catch (err) {
+      console.warn("openInstagram native bridge notice:", err);
+    }
+  }
+  // Standard fallback
+  window.open(`https://www.instagram.com/${username}`, "_blank", "noopener,noreferrer");
 };

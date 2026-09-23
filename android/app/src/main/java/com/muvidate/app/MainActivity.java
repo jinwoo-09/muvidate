@@ -3,6 +3,7 @@ package com.muvidate.app;
 import android.content.pm.ActivityInfo;
 import android.os.Build;
 import android.os.Bundle;
+import android.view.View;
 import android.view.WindowManager;
 
 import com.getcapacitor.BridgeActivity;
@@ -21,6 +22,20 @@ public class MainActivity extends BridgeActivity {
             WindowManager.LayoutParams lp = getWindow().getAttributes();
             lp.layoutInDisplayCutoutMode = WindowManager.LayoutParams.LAYOUT_IN_DISPLAY_CUTOUT_MODE_SHORT_EDGES;
             getWindow().setAttributes(lp);
+        }
+
+        // Disable overscroll stretch / rubber-band effect on Android WebView
+        if (getBridge() != null && getBridge().getWebView() != null) {
+            getBridge().getWebView().setOverScrollMode(View.OVER_SCROLL_NEVER);
+        }
+    }
+
+    @Override
+    public void onResume() {
+        super.onResume();
+        // Ensure overscroll mode remains disabled
+        if (getBridge() != null && getBridge().getWebView() != null) {
+            getBridge().getWebView().setOverScrollMode(View.OVER_SCROLL_NEVER);
         }
     }
 }

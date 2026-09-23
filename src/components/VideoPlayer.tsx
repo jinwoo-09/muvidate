@@ -798,7 +798,7 @@ function VideoPlayerComponent({
         err?.code === MediaError.MEDIA_ERR_DECODE ||
         src.startsWith("blob:")
       ) {
-        msg = "Android Chrome cannot decode this video's codec. Please select a video encoded with a codec supported by your device.";
+        msg = "Your device's media decoder could not decode this video codec or track. Please select a video encoded with a supported codec.";
       } else if (err?.code === MediaError.MEDIA_ERR_NETWORK) {
         msg = "A network error caused the video download to fail.";
       }

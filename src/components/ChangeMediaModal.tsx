@@ -535,7 +535,7 @@ export function ChangeMediaModal({
                 </label>
                 <input
                   type="file"
-                  accept="video/*"
+                  accept="video/*,.mp4,.mkv,.mov,.avi,.webm,.m4v,.flv,.wmv,.3gp,.ts,.m2ts"
                   onChange={(e) => {
                     const file = e.target.files?.[0];
                     if (!file) return;
