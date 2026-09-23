@@ -128,6 +128,9 @@ export function WatchRoom({ roomCode, initialOfflineFile, onLeaveRoom }: WatchRo
   const isHost = user?.uid === room?.adminUid;
   const lastProcessedMediaKeyRef = useRef<string>("");
 
+  const controlsLockedRef = useRef(room?.controlsLocked);
+  controlsLockedRef.current = room?.controlsLocked;
+
   const hasPostedJoinRef = useRef(false);
   const isInitialSnapshotRef = useRef(false);
   const prevParticipantsRef = useRef<Record<string, boolean>>({});
@@ -155,7 +158,7 @@ export function WatchRoom({ roomCode, initialOfflineFile, onLeaveRoom }: WatchRo
   const handleExplicitLeaveRoom = useCallback(() => {
     if (user && profile && roomCode) {
       // Save latest valid video playback timeline
-      if (latestPlaybackStateRef.current && (isHost || !room?.controlsLocked)) {
+      if (latestPlaybackStateRef.current && (isHost || !controlsLockedRef.current)) {
         const lastPlayback = latestPlaybackStateRef.current;
         if (lastPlayback.currentTime > 0) {
           const playbackRef = ref(rtdb, `rooms/${roomCode}/playbackState`);
@@ -183,7 +186,7 @@ export function WatchRoom({ roomCode, initialOfflineFile, onLeaveRoom }: WatchRo
       postSystemMessage(`@${profile.username} has left the room.`);
     }
     onLeaveRoom();
-  }, [user, profile, roomCode, isHost, room?.controlsLocked, postSystemMessage, onLeaveRoom]);
+  }, [user, profile, roomCode, isHost, postSystemMessage, onLeaveRoom]);
 
   useEffect(() => {
     if (!room) return;
@@ -377,7 +380,7 @@ export function WatchRoom({ roomCode, initialOfflineFile, onLeaveRoom }: WatchRo
     return () => {
       if (user && profile && roomCode) {
         // Save latest valid video playback timeline so rejoining resumes at last valid position
-        if (latestPlaybackStateRef.current && (isHost || !room?.controlsLocked)) {
+        if (latestPlaybackStateRef.current && (isHost || !controlsLockedRef.current)) {
           const lastPlayback = latestPlaybackStateRef.current;
           if (lastPlayback.currentTime > 0) {
             const playbackRef = ref(rtdb, `rooms/${roomCode}/playbackState`);
@@ -392,7 +395,7 @@ export function WatchRoom({ roomCode, initialOfflineFile, onLeaveRoom }: WatchRo
         }
       }
     };
-  }, [user, profile, roomCode, isHost, room?.controlsLocked]);
+  }, [user, profile, roomCode, isHost]);
 
   // Track other participants' online status changes for abrupt disconnects
   useEffect(() => {
@@ -457,14 +460,14 @@ export function WatchRoom({ roomCode, initialOfflineFile, onLeaveRoom }: WatchRo
 
 // Sync state emitter from VideoPlayer
   const handlePlaybackChange = useCallback((state: { isPlaying: boolean; currentTime: number }) => {
-    if (!room || !user || !profile) return;
+    if (!user || !profile || !roomCode) return;
     const now = Date.now();
     latestPlaybackStateRef.current = {
       isPlaying: state.isPlaying,
       currentTime: state.currentTime,
       lastUpdated: now
     };
-    if (room.controlsLocked && !isHost) return;
+    if (controlsLockedRef.current && !isHost) return;
 
     // Throttle frequent updates to avoid spamming RTDB
     lastSyncWriteTime.current = now;
@@ -477,12 +480,12 @@ export function WatchRoom({ roomCode, initialOfflineFile, onLeaveRoom }: WatchRo
       updatedBy: user.uid,
       updatedByUsername: profile.username
     }).catch(console.error);
-  }, [room?.controlsLocked, isHost, roomCode, user, profile]);
+  }, [isHost, roomCode, user, profile]);
 
   // Audio track sync
   const handleAudioTrackChange = useCallback((index: number) => {
-    if (!room || !user || !profile) return;
-    if (room.controlsLocked && !isHost) return;
+    if (!user || !profile || !roomCode) return;
+    if (controlsLockedRef.current && !isHost) return;
 
     const playbackRef = ref(rtdb, `rooms/${roomCode}/playbackState`);
     update(playbackRef, {
@@ -491,40 +494,21 @@ export function WatchRoom({ roomCode, initialOfflineFile, onLeaveRoom }: WatchRo
       updatedBy: user.uid,
       updatedByUsername: profile.username
     }).catch(console.error);
-  }, [room?.controlsLocked, isHost, roomCode, user, profile]);
+  }, [isHost, roomCode, user, profile]);
 
-  // Admin toggling control lock
+  // Admin toggling control lock (UI permission state only)
   const handleToggleControlLock = async () => {
     if (!isHost || !room) return;
     const roomRef = ref(rtdb, `rooms/${roomCode}`);
-    const now = Date.now();
-
-    const currentPlayback = latestPlaybackStateRef.current;
-    const updatePayload: Record<string, any> = {
+    await update(roomRef, {
       controlsLocked: !room.controlsLocked
-    };
-
-    if (currentPlayback) {
-      const liveCurrentTime = currentPlayback.isPlaying && currentPlayback.lastUpdated
-        ? Math.max(0, currentPlayback.currentTime + (now - currentPlayback.lastUpdated) / 1000)
-        : currentPlayback.currentTime;
-
-      updatePayload.playbackState = {
-        isPlaying: currentPlayback.isPlaying,
-        currentTime: liveCurrentTime,
-        lastUpdated: now,
-        updatedBy: user?.uid || "unknown",
-        updatedByUsername: profile?.username || "Host"
-      };
-    }
-
-    await update(roomRef, updatePayload).catch(console.error);
+    }).catch(console.error);
   };
 
   // Series Episode / Season Selection handler with RTDB synchronization
   const handleSelectEpisode = useCallback((seasonNum: number, episodeNum: number, episodeUrl: string) => {
-    if (!room) return;
-    const canControl = isHost || !room.controlsLocked;
+    if (!roomCode) return;
+    const canControl = isHost || !controlsLockedRef.current;
     if (!canControl) return;
 
     const roomRef = ref(rtdb, `rooms/${roomCode}`);
@@ -543,7 +527,7 @@ export function WatchRoom({ roomCode, initialOfflineFile, onLeaveRoom }: WatchRo
     }).catch(console.error);
 
     postSystemMessage(`Switched to Season ${seasonNum}, Episode ${episodeNum}`);
-  }, [room, isHost, roomCode, user?.uid, postSystemMessage]);
+  }, [isHost, roomCode, user?.uid, postSystemMessage]);
 
   // Handle movie natural completion
   const handleVideoEnded = useCallback(async () => {
