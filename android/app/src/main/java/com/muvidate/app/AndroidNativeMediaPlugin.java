@@ -5,6 +5,7 @@ import android.content.ContentResolver;
 import android.content.Intent;
 import android.database.Cursor;
 import android.graphics.Color;
+import android.graphics.Outline;
 import android.media.MediaMetadataRetriever;
 import android.net.Uri;
 import android.os.Build;
@@ -14,6 +15,7 @@ import android.view.Gravity;
 import android.view.TextureView;
 import android.view.View;
 import android.view.ViewGroup;
+import android.view.ViewOutlineProvider;
 import android.widget.FrameLayout;
 
 import androidx.activity.result.ActivityResult;
@@ -299,10 +301,11 @@ public class AndroidNativeMediaPlugin extends Plugin {
             return;
         }
 
-        final double x = call.getDouble("x", 0.0);
-        final double y = call.getDouble("y", 0.0);
-        final double width = call.getDouble("width", 0.0);
-        final double height = call.getDouble("height", 0.0);
+        final double cssLeft = call.getDouble("left", call.getDouble("x", 0.0));
+        final double cssTop = call.getDouble("top", call.getDouble("y", 0.0));
+        final double cssWidth = call.getDouble("width", 0.0);
+        final double cssHeight = call.getDouble("height", 0.0);
+        final double cssRadius = call.getDouble("borderRadius", 0.0);
         final boolean visible = call.getBoolean("visible", true);
         final boolean isFullscreen = call.getBoolean("isFullscreen", false);
 
@@ -316,16 +319,13 @@ public class AndroidNativeMediaPlugin extends Plugin {
                 return;
             }
 
-            if (!visible || width <= 0 || height <= 0) {
+            if (!visible || cssWidth <= 0 || cssHeight <= 0) {
                 playerContainer.setVisibility(View.GONE);
                 call.resolve();
                 return;
             }
 
             playerContainer.setVisibility(View.VISIBLE);
-
-            DisplayMetrics dm = getContext().getResources().getDisplayMetrics();
-            float density = dm.density;
 
             if (isFullscreen) {
                 FrameLayout.LayoutParams fullLp = new FrameLayout.LayoutParams(
@@ -338,19 +338,50 @@ public class AndroidNativeMediaPlugin extends Plugin {
                 playerContainer.setLayoutParams(fullLp);
                 playerContainer.setTranslationX(0);
                 playerContainer.setTranslationY(0);
+                playerContainer.setClipToOutline(false);
             } else {
-                int pixelWidth = (int) Math.round(width * density);
-                int pixelHeight = (int) Math.round(height * density);
-                int pixelX = (int) Math.round(x * density);
-                int pixelY = (int) Math.round(y * density);
+                DisplayMetrics dm = getContext().getResources().getDisplayMetrics();
+                float density = dm.density;
 
-                FrameLayout.LayoutParams inlineLp = new FrameLayout.LayoutParams(pixelWidth, pixelHeight);
+                View webView = getBridge() != null ? getBridge().getWebView() : null;
+                ViewGroup root = (ViewGroup) getActivity().findViewById(android.R.id.content);
+
+                int[] webViewLoc = new int[2];
+                int[] rootLoc = new int[2];
+
+                if (webView != null) {
+                    webView.getLocationOnScreen(webViewLoc);
+                }
+                if (root != null) {
+                    root.getLocationOnScreen(rootLoc);
+                }
+
+                int nativeLeft = webViewLoc[0] + (int) Math.round(cssLeft * density) - rootLoc[0];
+                int nativeTop = webViewLoc[1] + (int) Math.round(cssTop * density) - rootLoc[1];
+                int nativeWidth = (int) Math.round(cssWidth * density);
+                int nativeHeight = (int) Math.round(cssHeight * density);
+                final int nativeRadius = (int) Math.round(cssRadius * density);
+
+                FrameLayout.LayoutParams inlineLp = new FrameLayout.LayoutParams(nativeWidth, nativeHeight);
                 inlineLp.gravity = Gravity.TOP | Gravity.START;
-                inlineLp.leftMargin = pixelX;
-                inlineLp.topMargin = pixelY;
+                inlineLp.leftMargin = nativeLeft;
+                inlineLp.topMargin = nativeTop;
                 playerContainer.setLayoutParams(inlineLp);
                 playerContainer.setTranslationX(0);
                 playerContainer.setTranslationY(0);
+
+                if (nativeRadius > 0) {
+                    playerContainer.setOutlineProvider(new ViewOutlineProvider() {
+                        @Override
+                        public void getOutline(View view, Outline outline) {
+                            outline.setRoundRect(0, 0, view.getWidth(), view.getHeight(), nativeRadius);
+                        }
+                    });
+                    playerContainer.setClipToOutline(true);
+                    playerContainer.invalidateOutline();
+                } else {
+                    playerContainer.setClipToOutline(false);
+                }
             }
 
             call.resolve();

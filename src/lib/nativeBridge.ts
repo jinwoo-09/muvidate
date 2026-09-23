@@ -19,10 +19,13 @@ export interface AndroidNativeMediaPlugin {
   getVideoDuration(options: { uri: string }): Promise<{ duration: number }>;
   setupPlayer(options: { uri: string; position?: number; autoPlay?: boolean }): Promise<{ success: boolean }>;
   updatePlayerBounds(options: {
-    x: number;
-    y: number;
+    x?: number;
+    y?: number;
+    left?: number;
+    top?: number;
     width: number;
     height: number;
+    borderRadius?: number;
     visible?: boolean;
     isFullscreen?: boolean;
   }): Promise<void>;

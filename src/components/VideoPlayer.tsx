@@ -196,17 +196,55 @@ function VideoPlayerComponent({
     );
   }, [src]);
 
+  const rafIdRef = useRef<number | null>(null);
+
   const updateNativeBounds = useCallback(() => {
     if (!containerRef.current || !isAndroidNativeOffline) return;
-    const rect = containerRef.current.getBoundingClientRect();
-    AndroidNativeMedia.updatePlayerBounds({
-      x: rect.left,
-      y: rect.top,
-      width: rect.width,
-      height: rect.height,
-      visible: true,
-      isFullscreen: isFullscreenRef.current
-    }).catch(() => {});
+
+    if (isFullscreenRef.current) {
+      if (rafIdRef.current !== null) {
+        cancelAnimationFrame(rafIdRef.current);
+        rafIdRef.current = null;
+      }
+      AndroidNativeMedia.updatePlayerBounds({
+        left: 0,
+        top: 0,
+        x: 0,
+        y: 0,
+        width: window.innerWidth,
+        height: window.innerHeight,
+        borderRadius: 0,
+        visible: true,
+        isFullscreen: true
+      }).catch(() => {});
+      return;
+    }
+
+    if (rafIdRef.current !== null) {
+      cancelAnimationFrame(rafIdRef.current);
+    }
+
+    rafIdRef.current = requestAnimationFrame(() => {
+      rafIdRef.current = null;
+      if (!containerRef.current || !isAndroidNativeOffline) return;
+      if (isFullscreenRef.current) return;
+
+      const rect = containerRef.current.getBoundingClientRect();
+      const style = window.getComputedStyle(containerRef.current);
+      const borderRadius = parseFloat(style.borderRadius) || 16;
+
+      AndroidNativeMedia.updatePlayerBounds({
+        left: rect.left,
+        top: rect.top,
+        x: rect.left,
+        y: rect.top,
+        width: rect.width,
+        height: rect.height,
+        borderRadius: borderRadius,
+        visible: rect.width > 0 && rect.height > 0,
+        isFullscreen: false
+      }).catch(() => {});
+    });
   }, [isAndroidNativeOffline]);
 
   // Native Android Media3 playback lifecycle
@@ -261,15 +299,30 @@ function VideoPlayerComponent({
       updateNativeBounds();
     };
 
-    window.addEventListener("resize", handleBoundsUpdate);
-    window.addEventListener("scroll", handleBoundsUpdate, { passive: true });
-    const interval = setInterval(handleBoundsUpdate, 500);
+    window.addEventListener("resize", handleBoundsUpdate, { passive: true });
+    window.addEventListener("orientationchange", handleBoundsUpdate, { passive: true });
+    window.addEventListener("scroll", handleBoundsUpdate, { passive: true, capture: true });
+
+    let resizeObserver: ResizeObserver | null = null;
+    if (containerRef.current && typeof ResizeObserver !== "undefined") {
+      resizeObserver = new ResizeObserver(() => {
+        updateNativeBounds();
+      });
+      resizeObserver.observe(containerRef.current);
+    }
+
+    updateNativeBounds();
 
     return () => {
       isMounted = false;
+      if (rafIdRef.current !== null) {
+        cancelAnimationFrame(rafIdRef.current);
+        rafIdRef.current = null;
+      }
+      resizeObserver?.disconnect();
       window.removeEventListener("resize", handleBoundsUpdate);
-      window.removeEventListener("scroll", handleBoundsUpdate);
-      clearInterval(interval);
+      window.removeEventListener("orientationchange", handleBoundsUpdate);
+      window.removeEventListener("scroll", handleBoundsUpdate, true);
       stateListener?.remove();
       endListener?.remove();
       errorListener?.remove();
@@ -1091,6 +1144,7 @@ function VideoPlayerComponent({
         }
         unlockScreenOrientation();
       }
+      updateNativeBounds();
     };
 
     document.addEventListener("fullscreenchange", handleFullscreenChange);
@@ -1104,6 +1158,7 @@ function VideoPlayerComponent({
       isFullscreenRef.current = true;
       fullscreenEnteredAtRef.current = Date.now();
       lockLandscapeOrientation();
+      updateNativeBounds();
     };
     const onWebkitEnd = () => {
       setIsFullscreen(false);
@@ -1115,6 +1170,7 @@ function VideoPlayerComponent({
         overlayTimerRef.current = null;
       }
       unlockScreenOrientation();
+      updateNativeBounds();
     };
 
     if (video) {
