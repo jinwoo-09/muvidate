@@ -361,7 +361,8 @@ public class AndroidNativeMediaPlugin extends Plugin {
 
     @PluginMethod
     public void setVolume(PluginCall call) {
-        float volume = (float) call.getDouble("volume", 1.0);
+        Double volObj = call.getDouble("volume", 1.0);
+        float volume = volObj != null ? volObj.floatValue() : 1.0f;
         getActivity().runOnUiThread(() -> {
             if (exoPlayer != null) {
                 exoPlayer.setVolume(Math.max(0f, Math.min(1f, volume)));
