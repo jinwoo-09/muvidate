@@ -5,12 +5,14 @@ import android.content.ContentResolver;
 import android.content.Intent;
 import android.database.Cursor;
 import android.graphics.Color;
+import android.graphics.Matrix;
 import android.graphics.Outline;
 import android.media.MediaMetadataRetriever;
 import android.net.Uri;
 import android.os.Build;
 import android.provider.OpenableColumns;
 import android.util.DisplayMetrics;
+import android.util.Log;
 import android.view.Gravity;
 import android.view.TextureView;
 import android.view.View;
@@ -27,7 +29,6 @@ import androidx.media3.common.Tracks;
 import androidx.media3.common.VideoSize;
 import androidx.media3.common.util.UnstableApi;
 import androidx.media3.exoplayer.ExoPlayer;
-import androidx.media3.ui.AspectRatioFrameLayout;
 
 import com.getcapacitor.JSArray;
 import com.getcapacitor.JSObject;
@@ -43,11 +44,15 @@ public class AndroidNativeMediaPlugin extends Plugin {
 
     private ExoPlayer exoPlayer;
     private FrameLayout playerContainer;
-    private AspectRatioFrameLayout aspectRatioLayout;
     private TextureView textureView;
     private String currentUriString = null;
     private String lastErrorMessage = null;
     private boolean isPlayerReady = false;
+
+    private int currentVideoWidth = 0;
+    private int currentVideoHeight = 0;
+    private float currentPixelWidthHeightRatio = 1.0f;
+    private String currentDisplayMode = "fit";
 
     @PluginMethod
     public void pickOfflineVideo(PluginCall call) {
@@ -177,6 +182,9 @@ public class AndroidNativeMediaPlugin extends Plugin {
         this.currentUriString = uriStr;
         this.lastErrorMessage = null;
         this.isPlayerReady = false;
+        this.currentVideoWidth = 0;
+        this.currentVideoHeight = 0;
+        this.currentPixelWidthHeightRatio = 1.0f;
 
         getActivity().runOnUiThread(() -> {
             try {
@@ -194,6 +202,7 @@ public class AndroidNativeMediaPlugin extends Plugin {
                             if (playbackState == Player.STATE_READY) {
                                 isPlayerReady = true;
                                 notifyPlayerState();
+                                applyVideoTransform();
                             } else if (playbackState == Player.STATE_ENDED) {
                                 JSObject data = new JSObject();
                                 data.put("event", "ended");
@@ -203,9 +212,12 @@ public class AndroidNativeMediaPlugin extends Plugin {
 
                         @Override
                         public void onVideoSizeChanged(VideoSize videoSize) {
-                            if (videoSize.width > 0 && videoSize.height > 0 && aspectRatioLayout != null) {
-                                float ratio = (float) videoSize.width * videoSize.pixelWidthHeightRatio / videoSize.height;
-                                aspectRatioLayout.setAspectRatio(ratio);
+                            if (videoSize.width > 0 && videoSize.height > 0) {
+                                currentVideoWidth = videoSize.width;
+                                currentVideoHeight = videoSize.height;
+                                currentPixelWidthHeightRatio = videoSize.pixelWidthHeightRatio > 0 ? videoSize.pixelWidthHeightRatio : 1.0f;
+                                Log.d("AndroidNativeMedia", "onVideoSizeChanged: " + currentVideoWidth + "x" + currentVideoHeight + " PAR:" + currentPixelWidthHeightRatio);
+                                applyVideoTransform();
                             }
                         }
 
@@ -268,22 +280,22 @@ public class AndroidNativeMediaPlugin extends Plugin {
         playerContainer.setBackgroundColor(Color.TRANSPARENT);
         playerContainer.setVisibility(View.GONE);
 
-        aspectRatioLayout = new AspectRatioFrameLayout(activity);
-        aspectRatioLayout.setResizeMode(AspectRatioFrameLayout.RESIZE_MODE_FIT);
-        aspectRatioLayout.setLayoutParams(new FrameLayout.LayoutParams(
+        textureView = new TextureView(activity);
+        textureView.setLayoutParams(new FrameLayout.LayoutParams(
             ViewGroup.LayoutParams.MATCH_PARENT,
             ViewGroup.LayoutParams.MATCH_PARENT
         ));
 
-        textureView = new TextureView(activity);
-        textureView.setLayoutParams(new FrameLayout.LayoutParams(
-            ViewGroup.LayoutParams.MATCH_PARENT,
-            ViewGroup.LayoutParams.MATCH_PARENT,
-            Gravity.CENTER
-        ));
+        textureView.addOnLayoutChangeListener((v, left, top, right, bottom, oldLeft, oldTop, oldRight, oldBottom) -> {
+            int newWidth = right - left;
+            int newHeight = bottom - top;
+            if (newWidth > 0 && newHeight > 0 && (newWidth != (oldRight - oldLeft) || newHeight != (oldBottom - oldTop))) {
+                Log.d("AndroidNativeMedia", "TextureView layout changed: " + newWidth + "x" + newHeight);
+                applyVideoTransform();
+            }
+        });
 
-        aspectRatioLayout.addView(textureView);
-        playerContainer.addView(aspectRatioLayout);
+        playerContainer.addView(textureView);
 
         // Add native player container behind the WebView (index 0)
         root.addView(playerContainer, 0);
@@ -384,6 +396,8 @@ public class AndroidNativeMediaPlugin extends Plugin {
                 }
             }
 
+            applyVideoTransform();
+
             call.resolve();
         });
     }
@@ -434,18 +448,80 @@ public class AndroidNativeMediaPlugin extends Plugin {
     @PluginMethod
     public void setDisplayMode(PluginCall call) {
         String mode = call.getString("mode", "fit");
+        this.currentDisplayMode = mode != null ? mode : "fit";
         getActivity().runOnUiThread(() -> {
-            if (aspectRatioLayout != null) {
-                if ("zoom".equalsIgnoreCase(mode)) {
-                    aspectRatioLayout.setResizeMode(AspectRatioFrameLayout.RESIZE_MODE_ZOOM);
-                } else if ("stretch".equalsIgnoreCase(mode)) {
-                    aspectRatioLayout.setResizeMode(AspectRatioFrameLayout.RESIZE_MODE_FILL);
-                } else {
-                    aspectRatioLayout.setResizeMode(AspectRatioFrameLayout.RESIZE_MODE_FIT);
-                }
-            }
+            applyVideoTransform();
             call.resolve();
         });
+    }
+
+    private void applyVideoTransform() {
+        if (textureView == null) return;
+
+        int containerWidth = textureView.getWidth();
+        int containerHeight = textureView.getHeight();
+
+        if (containerWidth <= 0 || containerHeight <= 0) {
+            if (playerContainer != null && playerContainer.getLayoutParams() != null) {
+                containerWidth = playerContainer.getLayoutParams().width;
+                containerHeight = playerContainer.getLayoutParams().height;
+            }
+        }
+
+        if (containerWidth <= 0 || containerHeight <= 0) return;
+
+        if (exoPlayer != null && (currentVideoWidth <= 0 || currentVideoHeight <= 0)) {
+            VideoSize vs = exoPlayer.getVideoSize();
+            if (vs.width > 0 && vs.height > 0) {
+                currentVideoWidth = vs.width;
+                currentVideoHeight = vs.height;
+                currentPixelWidthHeightRatio = vs.pixelWidthHeightRatio > 0 ? vs.pixelWidthHeightRatio : 1.0f;
+            }
+        }
+
+        if (currentVideoWidth <= 0 || currentVideoHeight <= 0) {
+            Matrix identity = new Matrix();
+            textureView.setTransform(identity);
+            return;
+        }
+
+        float videoAspect = (currentVideoWidth * currentPixelWidthHeightRatio) / (float) currentVideoHeight;
+        float containerAspect = (float) containerWidth / (float) containerHeight;
+
+        Matrix matrix = new Matrix();
+        float px = containerWidth / 2.0f;
+        float py = containerHeight / 2.0f;
+
+        float scaleX = 1.0f;
+        float scaleY = 1.0f;
+
+        if ("zoom".equalsIgnoreCase(currentDisplayMode)) {
+            if (videoAspect > containerAspect) {
+                scaleX = videoAspect / containerAspect;
+                scaleY = 1.0f;
+            } else {
+                scaleX = 1.0f;
+                scaleY = containerAspect / videoAspect;
+            }
+        } else if ("stretch".equalsIgnoreCase(currentDisplayMode)) {
+            scaleX = 1.0f;
+            scaleY = 1.0f;
+        } else {
+            // "fit" (default)
+            if (videoAspect > containerAspect) {
+                scaleX = 1.0f;
+                scaleY = containerAspect / videoAspect;
+            } else {
+                scaleX = videoAspect / containerAspect;
+                scaleY = 1.0f;
+            }
+        }
+
+        matrix.setScale(scaleX, scaleY, px, py);
+        textureView.setTransform(matrix);
+        textureView.invalidate();
+
+        Log.d("AndroidNativeMedia", "applyVideoTransform [" + currentDisplayMode + "]: video=" + currentVideoWidth + "x" + currentVideoHeight + " (aspect=" + videoAspect + "), container=" + containerWidth + "x" + containerHeight + " (aspect=" + containerAspect + "), scaleX=" + scaleX + ", scaleY=" + scaleY + ", center=(" + px + "," + py + ")");
     }
 
     @PluginMethod
@@ -502,6 +578,9 @@ public class AndroidNativeMediaPlugin extends Plugin {
         currentUriString = null;
         lastErrorMessage = null;
         isPlayerReady = false;
+        currentVideoWidth = 0;
+        currentVideoHeight = 0;
+        currentPixelWidthHeightRatio = 1.0f;
     }
 
     private void notifyPlayerState() {
