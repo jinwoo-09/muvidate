@@ -985,7 +985,7 @@ export function WatchRoom({ roomCode, initialOfflineFile, onLeaveRoom }: WatchRo
         <div className="contents lg:block lg:col-span-8 lg:space-y-4">
           {/* Sticky Video Player Container - Pinned at top-0 with z-9999 only once scrolled to top */}
           <div
-            className="sticky top-0 z-[9999] bg-neutral-950/95 py-2 -mx-1 px-1 rounded-2xl"
+            className={`sticky top-0 z-[9999] ${isOfflineSource ? "bg-transparent" : "bg-neutral-950/95"} py-2 -mx-1 px-1 rounded-2xl watch-room-sticky-player`}
             style={{
               zIndex: 9999,
               top: 0

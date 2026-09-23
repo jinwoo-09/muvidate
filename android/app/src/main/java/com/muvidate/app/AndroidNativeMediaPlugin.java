@@ -11,6 +11,7 @@ import android.os.Build;
 import android.provider.OpenableColumns;
 import android.util.DisplayMetrics;
 import android.view.Gravity;
+import android.view.TextureView;
 import android.view.View;
 import android.view.ViewGroup;
 import android.widget.FrameLayout;
@@ -21,10 +22,10 @@ import androidx.media3.common.PlaybackException;
 import androidx.media3.common.Player;
 import androidx.media3.common.TrackGroup;
 import androidx.media3.common.Tracks;
+import androidx.media3.common.VideoSize;
 import androidx.media3.common.util.UnstableApi;
 import androidx.media3.exoplayer.ExoPlayer;
 import androidx.media3.ui.AspectRatioFrameLayout;
-import androidx.media3.ui.PlayerView;
 
 import com.getcapacitor.JSArray;
 import com.getcapacitor.JSObject;
@@ -39,8 +40,9 @@ import com.getcapacitor.annotation.CapacitorPlugin;
 public class AndroidNativeMediaPlugin extends Plugin {
 
     private ExoPlayer exoPlayer;
-    private PlayerView playerView;
     private FrameLayout playerContainer;
+    private AspectRatioFrameLayout aspectRatioLayout;
+    private TextureView textureView;
     private String currentUriString = null;
     private String lastErrorMessage = null;
     private boolean isPlayerReady = false;
@@ -180,7 +182,9 @@ public class AndroidNativeMediaPlugin extends Plugin {
 
                 if (exoPlayer == null) {
                     exoPlayer = new ExoPlayer.Builder(getContext()).build();
-                    playerView.setPlayer(exoPlayer);
+                    if (textureView != null) {
+                        exoPlayer.setVideoTextureView(textureView);
+                    }
 
                     exoPlayer.addListener(new Player.Listener() {
                         @Override
@@ -192,6 +196,14 @@ public class AndroidNativeMediaPlugin extends Plugin {
                                 JSObject data = new JSObject();
                                 data.put("event", "ended");
                                 notifyListeners("nativeVideoEnded", data);
+                            }
+                        }
+
+                        @Override
+                        public void onVideoSizeChanged(VideoSize videoSize) {
+                            if (videoSize.width > 0 && videoSize.height > 0 && aspectRatioLayout != null) {
+                                float ratio = (float) videoSize.width * videoSize.pixelWidthHeightRatio / videoSize.height;
+                                aspectRatioLayout.setAspectRatio(ratio);
                             }
                         }
 
@@ -211,6 +223,8 @@ public class AndroidNativeMediaPlugin extends Plugin {
                             notifyListeners("nativeVideoError", errObj);
                         }
                     });
+                } else if (textureView != null) {
+                    exoPlayer.setVideoTextureView(textureView);
                 }
 
                 Uri videoUri = Uri.parse(uriStr);
@@ -234,7 +248,7 @@ public class AndroidNativeMediaPlugin extends Plugin {
     }
 
     private void initNativePlayerView() {
-        if (playerView != null && playerContainer != null) return;
+        if (textureView != null && playerContainer != null) return;
 
         Activity activity = getActivity();
         if (activity == null) return;
@@ -243,32 +257,36 @@ public class AndroidNativeMediaPlugin extends Plugin {
         if (root == null) return;
 
         playerContainer = new FrameLayout(activity);
-        playerContainer.setLayoutParams(new FrameLayout.LayoutParams(
-            ViewGroup.LayoutParams.MATCH_PARENT,
-            ViewGroup.LayoutParams.MATCH_PARENT
-        ));
+        FrameLayout.LayoutParams containerLp = new FrameLayout.LayoutParams(
+            ViewGroup.LayoutParams.WRAP_CONTENT,
+            ViewGroup.LayoutParams.WRAP_CONTENT
+        );
+        containerLp.gravity = Gravity.TOP | Gravity.START;
+        playerContainer.setLayoutParams(containerLp);
         playerContainer.setBackgroundColor(Color.TRANSPARENT);
         playerContainer.setVisibility(View.GONE);
 
-        playerView = new PlayerView(activity);
-        playerView.setUseController(false); // Controlled via MuviDate UI overlays & sync engine
-        playerView.setResizeMode(AspectRatioFrameLayout.RESIZE_MODE_FIT);
-        playerView.setShutterBackgroundColor(Color.TRANSPARENT);
-        playerView.setBackgroundColor(Color.TRANSPARENT);
-        
-        FrameLayout.LayoutParams lp = new FrameLayout.LayoutParams(
+        aspectRatioLayout = new AspectRatioFrameLayout(activity);
+        aspectRatioLayout.setResizeMode(AspectRatioFrameLayout.RESIZE_MODE_FIT);
+        aspectRatioLayout.setLayoutParams(new FrameLayout.LayoutParams(
             ViewGroup.LayoutParams.MATCH_PARENT,
             ViewGroup.LayoutParams.MATCH_PARENT
-        );
-        lp.gravity = Gravity.TOP | Gravity.START;
-        playerView.setLayoutParams(lp);
+        ));
 
-        playerContainer.addView(playerView);
+        textureView = new TextureView(activity);
+        textureView.setLayoutParams(new FrameLayout.LayoutParams(
+            ViewGroup.LayoutParams.MATCH_PARENT,
+            ViewGroup.LayoutParams.MATCH_PARENT,
+            Gravity.CENTER
+        ));
 
-        // Add player view behind the activity content
+        aspectRatioLayout.addView(textureView);
+        playerContainer.addView(aspectRatioLayout);
+
+        // Add native player container behind the WebView (index 0)
         root.addView(playerContainer, 0);
 
-        // Ensure WebView background is transparent so native player underneath is visible
+        // Ensure WebView background is transparent so native TextureView is visible through transparent cutouts
         if (getBridge() != null && getBridge().getWebView() != null) {
             getBridge().getWebView().setBackgroundColor(Color.TRANSPARENT);
         }
@@ -289,7 +307,7 @@ public class AndroidNativeMediaPlugin extends Plugin {
         final boolean isFullscreen = call.getBoolean("isFullscreen", false);
 
         getActivity().runOnUiThread(() -> {
-            if (playerContainer == null || playerView == null) {
+            if (playerContainer == null || textureView == null) {
                 initNativePlayerView();
             }
 
@@ -315,9 +333,11 @@ public class AndroidNativeMediaPlugin extends Plugin {
                     ViewGroup.LayoutParams.MATCH_PARENT
                 );
                 fullLp.gravity = Gravity.TOP | Gravity.START;
-                playerView.setLayoutParams(fullLp);
-                playerView.setTranslationX(0);
-                playerView.setTranslationY(0);
+                fullLp.leftMargin = 0;
+                fullLp.topMargin = 0;
+                playerContainer.setLayoutParams(fullLp);
+                playerContainer.setTranslationX(0);
+                playerContainer.setTranslationY(0);
             } else {
                 int pixelWidth = (int) Math.round(width * density);
                 int pixelHeight = (int) Math.round(height * density);
@@ -326,9 +346,11 @@ public class AndroidNativeMediaPlugin extends Plugin {
 
                 FrameLayout.LayoutParams inlineLp = new FrameLayout.LayoutParams(pixelWidth, pixelHeight);
                 inlineLp.gravity = Gravity.TOP | Gravity.START;
-                playerView.setLayoutParams(inlineLp);
-                playerView.setTranslationX(pixelX);
-                playerView.setTranslationY(pixelY);
+                inlineLp.leftMargin = pixelX;
+                inlineLp.topMargin = pixelY;
+                playerContainer.setLayoutParams(inlineLp);
+                playerContainer.setTranslationX(0);
+                playerContainer.setTranslationY(0);
             }
 
             call.resolve();
@@ -382,13 +404,13 @@ public class AndroidNativeMediaPlugin extends Plugin {
     public void setDisplayMode(PluginCall call) {
         String mode = call.getString("mode", "fit");
         getActivity().runOnUiThread(() -> {
-            if (playerView != null) {
+            if (aspectRatioLayout != null) {
                 if ("zoom".equalsIgnoreCase(mode)) {
-                    playerView.setResizeMode(AspectRatioFrameLayout.RESIZE_MODE_ZOOM);
+                    aspectRatioLayout.setResizeMode(AspectRatioFrameLayout.RESIZE_MODE_ZOOM);
                 } else if ("stretch".equalsIgnoreCase(mode)) {
-                    playerView.setResizeMode(AspectRatioFrameLayout.RESIZE_MODE_FILL);
+                    aspectRatioLayout.setResizeMode(AspectRatioFrameLayout.RESIZE_MODE_FILL);
                 } else {
-                    playerView.setResizeMode(AspectRatioFrameLayout.RESIZE_MODE_FIT);
+                    aspectRatioLayout.setResizeMode(AspectRatioFrameLayout.RESIZE_MODE_FIT);
                 }
             }
             call.resolve();
@@ -435,6 +457,9 @@ public class AndroidNativeMediaPlugin extends Plugin {
     private void cleanupPlayer() {
         if (exoPlayer != null) {
             try {
+                if (textureView != null) {
+                    exoPlayer.clearVideoTextureView(textureView);
+                }
                 exoPlayer.stop();
                 exoPlayer.release();
             } catch (Exception ignored) {}

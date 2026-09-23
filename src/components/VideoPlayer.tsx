@@ -199,12 +199,11 @@ function VideoPlayerComponent({
   const updateNativeBounds = useCallback(() => {
     if (!containerRef.current || !isAndroidNativeOffline) return;
     const rect = containerRef.current.getBoundingClientRect();
-    const density = window.devicePixelRatio || 1;
     AndroidNativeMedia.updatePlayerBounds({
-      x: Math.round(rect.left * density),
-      y: Math.round(rect.top * density),
-      width: Math.round(rect.width * density),
-      height: Math.round(rect.height * density),
+      x: rect.left,
+      y: rect.top,
+      width: rect.width,
+      height: rect.height,
       visible: true,
       isFullscreen: isFullscreenRef.current
     }).catch(() => {});
