@@ -505,11 +505,11 @@ function VideoPlayerComponent({
     const isInitialSync = !hasInitialSyncAppliedRef.current;
     hasInitialSyncAppliedRef.current = true;
 
-    // Skip if this exact sync update has already been processed and this is not the initial mount
+    // Skip if this sync update is older than or equal to the last processed sync update
     if (
       !isInitialSync &&
       lastSyncProcessedRef.current &&
-      lastSyncProcessedRef.current.lastUpdated === syncState.lastUpdated
+      syncState.lastUpdated <= lastSyncProcessedRef.current.lastUpdated
     ) {
       return;
     }

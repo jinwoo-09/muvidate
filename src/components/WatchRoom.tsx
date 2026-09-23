@@ -131,7 +131,7 @@ export function WatchRoom({ roomCode, initialOfflineFile, onLeaveRoom }: WatchRo
   const hasPostedJoinRef = useRef(false);
   const isInitialSnapshotRef = useRef(false);
   const prevParticipantsRef = useRef<Record<string, boolean>>({});
-  const lastPresenceMessageTimestampRef = useRef<Record<string, { status: boolean; time: number }>>({});
+  const lastPresenceMessageTimestampRef = useRef<Record<string, { status: boolean; time: number; lastActive?: number }>>({});
   const latestPlaybackStateRef = useRef<{
     isPlaying: boolean;
     currentTime: number;
@@ -170,11 +170,13 @@ export function WatchRoom({ roomCode, initialOfflineFile, onLeaveRoom }: WatchRo
       }
 
       // Mark participant as offline and cancel onDisconnect
+      const now = Date.now();
       const participantRef = ref(rtdb, `rooms/${roomCode}/participants/${user.uid}`);
       onDisconnect(participantRef).cancel().catch(() => {});
       update(participantRef, {
         isOnline: false,
-        lastActive: Date.now()
+        lastActive: now,
+        lastLeaveMsgTime: now
       }).catch(() => {});
 
       // Post system leave message
@@ -427,11 +429,19 @@ export function WatchRoom({ roomCode, initialOfflineFile, onLeaveRoom }: WatchRo
       const isOnline = p.isOnline === true;
 
       if (wasOnline && !isOnline) {
+        const lastActive = p.lastActive || 0;
+        const lastLeaveMsgTime = p.lastLeaveMsgTime || 0;
         const lastRecord = lastPresenceMessageTimestampRef.current[uid];
-        // Ensure at least 3 seconds between repeated presence messages for the same user
-        if (!lastRecord || lastRecord.status !== false || now - lastRecord.time > 3000) {
-          lastPresenceMessageTimestampRef.current[uid] = { status: false, time: now };
+
+        // Check if a leave message was already recorded or sent for this leave transition
+        const alreadyProcessedLocally = lastRecord?.lastActive === lastActive;
+        const alreadyProcessedInRTDB = lastLeaveMsgTime > 0 && Math.abs(lastLeaveMsgTime - lastActive) < 10000;
+
+        if (!alreadyProcessedLocally && !alreadyProcessedInRTDB) {
+          lastPresenceMessageTimestampRef.current[uid] = { status: false, time: now, lastActive };
           if (isResponsibleForOthers) {
+            const pRef = ref(rtdb, `rooms/${roomCode}/participants/${uid}`);
+            update(pRef, { lastLeaveMsgTime: now }).catch(() => {});
             postSystemMessage(`@${p.username} has left the room.`);
           }
         }
@@ -487,9 +497,28 @@ export function WatchRoom({ roomCode, initialOfflineFile, onLeaveRoom }: WatchRo
   const handleToggleControlLock = async () => {
     if (!isHost || !room) return;
     const roomRef = ref(rtdb, `rooms/${roomCode}`);
-    await update(roomRef, {
+    const now = Date.now();
+
+    const currentPlayback = latestPlaybackStateRef.current;
+    const updatePayload: Record<string, any> = {
       controlsLocked: !room.controlsLocked
-    });
+    };
+
+    if (currentPlayback) {
+      const liveCurrentTime = currentPlayback.isPlaying && currentPlayback.lastUpdated
+        ? Math.max(0, currentPlayback.currentTime + (now - currentPlayback.lastUpdated) / 1000)
+        : currentPlayback.currentTime;
+
+      updatePayload.playbackState = {
+        isPlaying: currentPlayback.isPlaying,
+        currentTime: liveCurrentTime,
+        lastUpdated: now,
+        updatedBy: user?.uid || "unknown",
+        updatedByUsername: profile?.username || "Host"
+      };
+    }
+
+    await update(roomRef, updatePayload).catch(console.error);
   };
 
   // Series Episode / Season Selection handler with RTDB synchronization

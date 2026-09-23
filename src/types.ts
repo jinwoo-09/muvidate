@@ -42,6 +42,8 @@ export interface RoomParticipant {
   joinedAt: number;
   isOnline: boolean;
   hasOfflineFile?: boolean;
+  lastActive?: number;
+  lastLeaveMsgTime?: number;
 }
 
 export interface ChatMessage {
