@@ -277,7 +277,7 @@ public class AndroidNativeMediaPlugin extends Plugin {
         );
         containerLp.gravity = Gravity.TOP | Gravity.START;
         playerContainer.setLayoutParams(containerLp);
-        playerContainer.setBackgroundColor(Color.TRANSPARENT);
+        playerContainer.setBackgroundColor(Color.BLACK);
         playerContainer.setVisibility(View.GONE);
 
         textureView = new TextureView(activity);
@@ -297,13 +297,19 @@ public class AndroidNativeMediaPlugin extends Plugin {
 
         playerContainer.addView(textureView);
 
-        // Add native player container behind the WebView (index 0)
-        root.addView(playerContainer, 0);
+        // Forward touch events to the WebView so React gestures, button taps, and controls work seamlessly
+        playerContainer.setOnTouchListener((v, event) -> {
+            View webView = getBridge() != null ? getBridge().getWebView() : null;
+            if (webView != null) {
+                webView.dispatchTouchEvent(event);
+                return true;
+            }
+            return false;
+        });
 
-        // Ensure WebView background is transparent so native TextureView is visible through transparent cutouts
-        if (getBridge() != null && getBridge().getWebView() != null) {
-            getBridge().getWebView().setBackgroundColor(Color.TRANSPARENT);
-        }
+        // Add native player container ABOVE the WebView in the root content hierarchy
+        root.addView(playerContainer);
+        playerContainer.bringToFront();
     }
 
     @PluginMethod
@@ -338,6 +344,7 @@ public class AndroidNativeMediaPlugin extends Plugin {
             }
 
             playerContainer.setVisibility(View.VISIBLE);
+            playerContainer.bringToFront();
 
             if (isFullscreen) {
                 FrameLayout.LayoutParams fullLp = new FrameLayout.LayoutParams(

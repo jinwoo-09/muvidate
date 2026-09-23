@@ -330,17 +330,6 @@ function VideoPlayerComponent({
     };
   }, [src, isAndroidNativeOffline, updateNativeBounds]);
 
-  // Set transparent page background when native offline video is active so native PlayerView is visible
-  useEffect(() => {
-    if (!isAndroidNativeOffline) return;
-    document.documentElement.classList.add("native-offline-active");
-    document.body.classList.add("native-offline-active");
-
-    return () => {
-      document.documentElement.classList.remove("native-offline-active");
-      document.body.classList.remove("native-offline-active");
-    };
-  }, [isAndroidNativeOffline]);
 
   // Sync displayMode ("fit", "zoom", "stretch") to native player view
   useEffect(() => {
