@@ -20,12 +20,9 @@ import {
   ChevronDown,
   Subtitles
 } from "lucide-react";
-import { Capacitor } from "@capacitor/core";
-import { App as CapApp } from "@capacitor/app";
 import { rtdb } from "../lib/firebase";
 import { ref, onChildAdded, off, get } from "firebase/database";
 import { SeriesStructure, extractSeriesStructure, getEpisodeUrl, getSubtitleForEpisode, convertSrtToVtt } from "../lib/seriesUtils";
-import { isAndroidNative, enterNativeFullscreen, exitNativeFullscreen, AndroidNativeMedia } from "../lib/nativeBridge";
 
 export interface VideoPlayerProps {
   src: string;
@@ -188,155 +185,7 @@ function VideoPlayerComponent({
     return extractSeriesStructure(src);
   }, [propSeriesStructure, src]);
 
-  const isAndroidNativeOffline = React.useMemo(() => {
-    return isAndroidNative() && (
-      src.startsWith("content://") ||
-      src.startsWith("file://") ||
-      src.startsWith("offline://")
-    );
-  }, [src]);
 
-  const rafIdRef = useRef<number | null>(null);
-
-  const updateNativeBounds = useCallback(() => {
-    if (!containerRef.current || !isAndroidNativeOffline) return;
-
-    if (isFullscreenRef.current) {
-      if (rafIdRef.current !== null) {
-        cancelAnimationFrame(rafIdRef.current);
-        rafIdRef.current = null;
-      }
-      AndroidNativeMedia.updatePlayerBounds({
-        left: 0,
-        top: 0,
-        x: 0,
-        y: 0,
-        width: window.innerWidth,
-        height: window.innerHeight,
-        borderRadius: 0,
-        visible: true,
-        isFullscreen: true
-      }).catch(() => {});
-      return;
-    }
-
-    if (rafIdRef.current !== null) {
-      cancelAnimationFrame(rafIdRef.current);
-    }
-
-    rafIdRef.current = requestAnimationFrame(() => {
-      rafIdRef.current = null;
-      if (!containerRef.current || !isAndroidNativeOffline) return;
-      if (isFullscreenRef.current) return;
-
-      const rect = containerRef.current.getBoundingClientRect();
-      const style = window.getComputedStyle(containerRef.current);
-      const borderRadius = parseFloat(style.borderRadius) || 16;
-
-      AndroidNativeMedia.updatePlayerBounds({
-        left: rect.left,
-        top: rect.top,
-        x: rect.left,
-        y: rect.top,
-        width: rect.width,
-        height: rect.height,
-        borderRadius: borderRadius,
-        visible: rect.width > 0 && rect.height > 0,
-        isFullscreen: false
-      }).catch(() => {});
-    });
-  }, [isAndroidNativeOffline]);
-
-  // Native Android Media3 playback lifecycle
-  useEffect(() => {
-    if (!isAndroidNativeOffline) return;
-    let isMounted = true;
-    let stateListener: any = null;
-    let endListener: any = null;
-    let errorListener: any = null;
-
-    const init = async () => {
-      try {
-        setIsBuffering(true);
-        setPlaybackError(null);
-        await AndroidNativeMedia.setupPlayer({
-          uri: src,
-          position: syncState?.currentTime || 0,
-          autoPlay: syncState?.isPlaying || false
-        });
-
-        stateListener = await AndroidNativeMedia.addListener("nativePlayerStateChange", (data) => {
-          if (!isMounted) return;
-          setIsPlaying(data.isPlaying);
-          setCurrentTime(data.currentTime);
-          if (data.duration > 0) setDuration(data.duration);
-          setIsBuffering(data.isBuffering);
-        });
-
-        endListener = await AndroidNativeMedia.addListener("nativeVideoEnded", () => {
-          if (!isMounted) return;
-          setIsPlaying(false);
-          if (onVideoEndedRef.current) onVideoEndedRef.current();
-        });
-
-        errorListener = await AndroidNativeMedia.addListener("nativeVideoError", () => {
-          if (!isMounted) return;
-          setIsBuffering(false);
-          setPlaybackError("This video codec or audio track is not supported by this Android device.");
-        });
-
-        updateNativeBounds();
-      } catch (err: any) {
-        console.error("Native player setup error:", err);
-        setPlaybackError("Failed to initialize Android native media player.");
-        setIsBuffering(false);
-      }
-    };
-
-    init();
-
-    const handleBoundsUpdate = () => {
-      updateNativeBounds();
-    };
-
-    window.addEventListener("resize", handleBoundsUpdate, { passive: true });
-    window.addEventListener("orientationchange", handleBoundsUpdate, { passive: true });
-    window.addEventListener("scroll", handleBoundsUpdate, { passive: true, capture: true });
-
-    let resizeObserver: ResizeObserver | null = null;
-    if (containerRef.current && typeof ResizeObserver !== "undefined") {
-      resizeObserver = new ResizeObserver(() => {
-        updateNativeBounds();
-      });
-      resizeObserver.observe(containerRef.current);
-    }
-
-    updateNativeBounds();
-
-    return () => {
-      isMounted = false;
-      if (rafIdRef.current !== null) {
-        cancelAnimationFrame(rafIdRef.current);
-        rafIdRef.current = null;
-      }
-      resizeObserver?.disconnect();
-      window.removeEventListener("resize", handleBoundsUpdate);
-      window.removeEventListener("orientationchange", handleBoundsUpdate);
-      window.removeEventListener("scroll", handleBoundsUpdate, true);
-      stateListener?.remove();
-      endListener?.remove();
-      errorListener?.remove();
-      AndroidNativeMedia.release().catch(() => {});
-    };
-  }, [src, isAndroidNativeOffline, updateNativeBounds]);
-
-
-  // Sync displayMode ("fit", "zoom", "stretch") to native player view
-  useEffect(() => {
-    if (isAndroidNativeOffline) {
-      AndroidNativeMedia.setDisplayMode({ mode: displayMode }).catch(() => {});
-    }
-  }, [displayMode, isAndroidNativeOffline]);
 
   const [localSeason, setLocalSeason] = useState(1);
   const [localEpisode, setLocalEpisode] = useState(1);
@@ -685,39 +534,6 @@ function VideoPlayerComponent({
       audioTrackIndex: syncState.audioTrackIndex
     };
 
-    // Handle Android Native Media3 offline playback sync
-    if (isAndroidNativeOffline) {
-      const now = Date.now();
-      const elapsed = syncState.isPlaying && syncState.lastUpdated
-        ? Math.max(0, (now - syncState.lastUpdated) / 1000)
-        : 0;
-      const expectedTime = syncState.isPlaying
-        ? Math.max(0, syncState.currentTime + elapsed)
-        : syncState.currentTime;
-
-      let hasMeaningfulSync = false;
-      const timeDiff = Math.abs(currentTime - expectedTime);
-      if (isInitialSync || timeDiff > 1.5) {
-        AndroidNativeMedia.seekTo({ position: expectedTime });
-        setCurrentTime(expectedTime);
-        hasMeaningfulSync = true;
-      }
-
-      if (syncState.isPlaying && !isPlaying) {
-        AndroidNativeMedia.play();
-        setIsPlaying(true);
-        hasMeaningfulSync = true;
-      } else if (!syncState.isPlaying && isPlaying) {
-        AndroidNativeMedia.pause();
-        setIsPlaying(false);
-        hasMeaningfulSync = true;
-      }
-
-      if (hasMeaningfulSync) {
-        triggerSyncIndicator();
-      }
-      return;
-    }
     const now = Date.now();
     const elapsed = syncState.isPlaying && syncState.lastUpdated
       ? Math.max(0, (now - syncState.lastUpdated) / 1000)
@@ -1052,11 +868,6 @@ function VideoPlayerComponent({
 
   // Screen Orientation helpers for mobile fullscreen
   const lockLandscapeOrientation = async () => {
-    if (isAndroidNative()) {
-      enterNativeFullscreen();
-      return;
-    }
-
     try {
       const orientation =
         window.screen?.orientation ||
@@ -1070,7 +881,7 @@ function VideoPlayerComponent({
       } else if ((window.screen as any)?.lockOrientation) {
         (window.screen as any).lockOrientation("landscape");
       } else if ((window.screen as any)?.mozLockOrientation) {
-        (window.screen as any).mozLockOrientation("landscape");
+        (window.screen as any)?.mozLockOrientation("landscape");
       } else if ((window.screen as any)?.msLockOrientation) {
         (window.screen as any).msLockOrientation("landscape");
       }
@@ -1080,11 +891,6 @@ function VideoPlayerComponent({
   };
 
   const unlockScreenOrientation = () => {
-    if (isAndroidNative()) {
-      exitNativeFullscreen();
-      return;
-    }
-
     try {
       const orientation =
         window.screen?.orientation ||
@@ -1133,7 +939,6 @@ function VideoPlayerComponent({
         }
         unlockScreenOrientation();
       }
-      updateNativeBounds();
     };
 
     document.addEventListener("fullscreenchange", handleFullscreenChange);
@@ -1147,7 +952,6 @@ function VideoPlayerComponent({
       isFullscreenRef.current = true;
       fullscreenEnteredAtRef.current = Date.now();
       lockLandscapeOrientation();
-      updateNativeBounds();
     };
     const onWebkitEnd = () => {
       setIsFullscreen(false);
@@ -1159,7 +963,6 @@ function VideoPlayerComponent({
         overlayTimerRef.current = null;
       }
       unlockScreenOrientation();
-      updateNativeBounds();
     };
 
     if (video) {
@@ -1290,20 +1093,6 @@ function VideoPlayerComponent({
   const togglePlayPause = async () => {
     if (!canControl) return;
 
-    if (isAndroidNativeOffline) {
-      isUserIntentionalActionRef.current = true;
-      if (isPlaying) {
-        AndroidNativeMedia.pause();
-        setIsPlaying(false);
-        emitPlaybackState(false, currentTime);
-      } else {
-        AndroidNativeMedia.play();
-        setIsPlaying(true);
-        emitPlaybackState(true, currentTime);
-      }
-      return;
-    }
-
     const video = videoRef.current;
     if (!video) return;
 
@@ -1352,11 +1141,6 @@ function VideoPlayerComponent({
     isUserIntentionalActionRef.current = true;
     const target = Math.max(0, Math.min(duration || 0, currentTime + seconds));
     setCurrentTime(target);
-    if (isAndroidNativeOffline) {
-      AndroidNativeMedia.seekTo({ position: target });
-      emitPlaybackState(isPlaying, target);
-      return;
-    }
     const video = videoRef.current;
     if (!video) return;
     video.currentTime = target;
@@ -1378,11 +1162,6 @@ function VideoPlayerComponent({
     if (!canControl) return;
     isSeekingRef.current = false;
     isUserIntentionalActionRef.current = true;
-    if (isAndroidNativeOffline) {
-      AndroidNativeMedia.seekTo({ position: currentTime });
-      emitPlaybackState(isPlaying, currentTime);
-      return;
-    }
     const video = videoRef.current;
     if (video) {
       video.currentTime = currentTime;
@@ -1395,9 +1174,7 @@ function VideoPlayerComponent({
     setVolume(val);
     const nextMuted = val === 0;
     setIsMuted(nextMuted);
-    if (isAndroidNativeOffline) {
-      AndroidNativeMedia.setVolume({ volume: nextMuted ? 0 : val });
-    } else if (videoRef.current) {
+    if (videoRef.current) {
       videoRef.current.volume = val;
       videoRef.current.muted = nextMuted;
     }
@@ -1406,9 +1183,7 @@ function VideoPlayerComponent({
   const toggleMute = () => {
     const nextMuted = !isMuted;
     setIsMuted(nextMuted);
-    if (isAndroidNativeOffline) {
-      AndroidNativeMedia.setVolume({ volume: nextMuted ? 0 : volume });
-    } else if (videoRef.current) {
+    if (videoRef.current) {
       videoRef.current.muted = nextMuted;
     }
     resetControlsTimeout();
@@ -1470,29 +1245,6 @@ function VideoPlayerComponent({
     }
   };
 
-  // Android hardware back button handler: if video is in fullscreen, exit fullscreen first
-  useEffect(() => {
-    if (!Capacitor.isNativePlatform()) return;
-
-    let backHandle: { remove: () => void } | null = null;
-
-    if (isFullscreen) {
-      CapApp.addListener("backButton", () => {
-        if (isFullscreenRef.current) {
-          toggleFullscreen();
-        }
-      }).then((handle) => {
-        backHandle = handle;
-      });
-    }
-
-    return () => {
-      if (backHandle) {
-        backHandle.remove();
-      }
-    };
-  }, [isFullscreen]);
-
   const formatTime = (seconds: number) => {
     if (isNaN(seconds) || !isFinite(seconds)) return "00:00";
     const h = Math.floor(seconds / 3600);
@@ -1546,31 +1298,24 @@ function VideoPlayerComponent({
           resetControlsTimeout();
         }
       }}
-      className={`relative w-full aspect-video ${isAndroidNativeOffline ? "bg-transparent" : "bg-black"} rounded-2xl overflow-hidden group select-none shadow-2xl border border-neutral-800 flex items-center justify-center`}
+      className="relative w-full aspect-video bg-black rounded-2xl overflow-hidden group select-none shadow-2xl border border-neutral-800 flex items-center justify-center"
     >
-      {/* HTML5 Video Element / Native Android Player Overlay */}
-      {isAndroidNativeOffline ? (
-        <div
-          className="w-full h-full cursor-pointer bg-transparent"
-          onClick={handleVideoClick}
-        />
-      ) : (
-        <video
-          ref={videoRef}
-          src={src}
-          poster={poster}
-          playsInline
-          preload="metadata"
-          className={`w-full h-full cursor-pointer ${
-            displayMode === "fit"
-              ? "object-contain"
-              : displayMode === "zoom"
-                ? "object-cover"
-                : "object-fill"
-          }`}
-          onClick={handleVideoClick}
-        />
-      )}
+      {/* HTML5 Video Element */}
+      <video
+        ref={videoRef}
+        src={src}
+        poster={poster}
+        playsInline
+        preload="metadata"
+        className={`w-full h-full cursor-pointer ${
+          displayMode === "fit"
+            ? "object-contain"
+            : displayMode === "zoom"
+              ? "object-cover"
+              : "object-fill"
+        }`}
+        onClick={handleVideoClick}
+      />
 
       {/* Buffering Indicator */}
       {isBuffering && !playbackError && (
@@ -1591,15 +1336,7 @@ function VideoPlayerComponent({
           <button
             onClick={() => {
               setPlaybackError(null);
-              if (isAndroidNativeOffline) {
-                AndroidNativeMedia.setupPlayer({
-                  uri: src,
-                  position: currentTime,
-                  autoPlay: true
-                });
-              } else {
-                videoRef.current?.load();
-              }
+              videoRef.current?.load();
             }}
             className="px-4 py-2 bg-rose-600 hover:bg-rose-500 text-white rounded-xl text-xs font-semibold transition"
           >

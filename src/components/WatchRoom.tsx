@@ -24,15 +24,12 @@ import {
   Clock, 
   ArrowLeft,
   RefreshCw,
-  Loader2,
-  Smartphone,
-  FolderOpen
+  Loader2
 } from "lucide-react";
-import { isAndroidNative, pickOfflineNativeVideo, OfflineNativeVideoResult } from "../lib/nativeBridge";
 
 interface WatchRoomProps {
   roomCode: string;
-  initialOfflineFile?: File | OfflineNativeVideoResult;
+  initialOfflineFile?: File;
   onLeaveRoom: () => void;
 }
 
@@ -105,19 +102,14 @@ export function WatchRoom({ roomCode, initialOfflineFile, onLeaveRoom }: WatchRo
     return (room as any)[seasonSubtitleKey] || room.subtitle;
   }, [room?.movieSource, room?.season, room?.subtitle, (room as any)?.subtitle2, (room as any)?.subtitle3]);
 
-  const handleOfflineFileSelected = useCallback((file: File | OfflineNativeVideoResult) => {
+  const handleOfflineFileSelected = useCallback((file: File) => {
     if (activeObjectUrlRef.current && activeObjectUrlRef.current.startsWith("blob:")) {
       URL.revokeObjectURL(activeObjectUrlRef.current);
     }
-    if ("uri" in file) {
-      setLocalVideoUrl(file.uri);
-      setLocalFileName(file.name);
-    } else {
-      const url = URL.createObjectURL(file);
-      activeObjectUrlRef.current = url;
-      setLocalVideoUrl(url);
-      setLocalFileName(file.name);
-    }
+    const url = URL.createObjectURL(file);
+    activeObjectUrlRef.current = url;
+    setLocalVideoUrl(url);
+    setLocalFileName(file.name);
     setOfflineDurationError(null);
   }, []);
 
@@ -127,15 +119,10 @@ export function WatchRoom({ roomCode, initialOfflineFile, onLeaveRoom }: WatchRo
       if (activeObjectUrlRef.current && activeObjectUrlRef.current.startsWith("blob:")) {
         URL.revokeObjectURL(activeObjectUrlRef.current);
       }
-      if ("uri" in initialOfflineFile) {
-        setLocalVideoUrl(initialOfflineFile.uri);
-        setLocalFileName(initialOfflineFile.name);
-      } else {
-        const url = URL.createObjectURL(initialOfflineFile);
-        activeObjectUrlRef.current = url;
-        setLocalVideoUrl(url);
-        setLocalFileName(initialOfflineFile.name);
-      }
+      const url = URL.createObjectURL(initialOfflineFile);
+      activeObjectUrlRef.current = url;
+      setLocalVideoUrl(url);
+      setLocalFileName(initialOfflineFile.name);
     }
   }, [initialOfflineFile]);
 
@@ -615,44 +602,7 @@ export function WatchRoom({ roomCode, initialOfflineFile, onLeaveRoom }: WatchRo
     copyRoomCode();
   };
 
-  // Handle participant selecting their offline file on Android via native SAF
-  const handleNativeOfflineFileSelect = async () => {
-    setOfflineDurationError(null);
-    setIsExtractingDuration(true);
 
-    try {
-      const res = await pickOfflineNativeVideo();
-      const localDuration = res.duration;
-
-      // Verify duration against room's expected offlineDuration
-      if (room && room.offlineDuration && room.offlineDuration > 0 && localDuration > 0) {
-        const durationDiff = Math.abs(localDuration - room.offlineDuration);
-        if (durationDiff > 1.5) { // 1.5s tolerance
-          setOfflineDurationError(
-            `This video duration does not match the room video. Please select the same video. (Expected ~${formatVideoTime(room.offlineDuration)}, selected file is ${formatVideoTime(localDuration)})`
-          );
-          setIsExtractingDuration(false);
-          return;
-        }
-      }
-
-      setLocalVideoUrl(res.uri);
-      setLocalFileName(res.name);
-
-      if (user) {
-        const participantRef = ref(rtdb, `rooms/${roomCode}/participants/${user.uid}`);
-        update(participantRef, { hasOfflineFile: true }).catch(() => {});
-      }
-    } catch (err: any) {
-      if (err.message !== "USER_CANCELLED" && !err.message?.includes("CANCELLED")) {
-        setOfflineDurationError(
-          err.message || "Failed to load selected video file on Android."
-        );
-      }
-    } finally {
-      setIsExtractingDuration(false);
-    }
-  };
 
   // Handle participant selecting their offline file
   const handleOfflineFileSelect = async (e: React.ChangeEvent<HTMLInputElement>) => {
@@ -866,47 +816,26 @@ export function WatchRoom({ roomCode, initialOfflineFile, onLeaveRoom }: WatchRo
               </div>
             </div>
 
-            {isAndroidNative() ? (
-              <button
-                type="button"
-                onClick={handleNativeOfflineFileSelect}
+            <label className={`px-4 py-2.5 ${isExtractingDuration ? "bg-amber-800 cursor-wait" : "bg-amber-600 hover:bg-amber-500 cursor-pointer"} text-white text-xs font-semibold rounded-xl shadow-lg transition shrink-0 flex items-center gap-2`}>
+              {isExtractingDuration ? (
+                <>
+                  <Loader2 className="w-4 h-4 animate-spin" />
+                  <span>Checking file...</span>
+                </>
+              ) : (
+                <>
+                  <HardDrive className="w-4 h-4" />
+                  <span>Select File on Your Device</span>
+                </>
+              )}
+              <input
+                type="file"
+                accept="video/*,.mp4,.mkv,.mov,.avi,.webm,.m4v,.flv,.wmv,.3gp,.ts,.m2ts"
                 disabled={isExtractingDuration}
-                className={`px-4 py-2.5 ${isExtractingDuration ? "bg-amber-800 cursor-wait" : "bg-amber-600 hover:bg-amber-500 cursor-pointer"} text-white text-xs font-semibold rounded-xl shadow-lg transition shrink-0 flex items-center gap-2`}
-              >
-                {isExtractingDuration ? (
-                  <>
-                    <Loader2 className="w-4 h-4 animate-spin" />
-                    <span>Checking Android file...</span>
-                  </>
-                ) : (
-                  <>
-                    <FolderOpen className="w-4 h-4" />
-                    <span>Select File on Android</span>
-                  </>
-                )}
-              </button>
-            ) : (
-              <label className={`px-4 py-2.5 ${isExtractingDuration ? "bg-amber-800 cursor-wait" : "bg-amber-600 hover:bg-amber-500 cursor-pointer"} text-white text-xs font-semibold rounded-xl shadow-lg transition shrink-0 flex items-center gap-2`}>
-                {isExtractingDuration ? (
-                  <>
-                    <Loader2 className="w-4 h-4 animate-spin" />
-                    <span>Checking file...</span>
-                  </>
-                ) : (
-                  <>
-                    <HardDrive className="w-4 h-4" />
-                    <span>Select File on Your Device</span>
-                  </>
-                )}
-                <input
-                  type="file"
-                  accept="video/*,.mp4,.mkv,.mov,.avi,.webm,.m4v,.flv,.wmv,.3gp,.ts,.m2ts"
-                  disabled={isExtractingDuration}
-                  className="hidden"
-                  onChange={handleOfflineFileSelect}
-                />
-              </label>
-            )}
+                className="hidden"
+                onChange={handleOfflineFileSelect}
+              />
+            </label>
           </div>
 
           {offlineDurationError && (
@@ -915,30 +844,8 @@ export function WatchRoom({ roomCode, initialOfflineFile, onLeaveRoom }: WatchRo
               <span>{offlineDurationError}</span>
             </div>
           )}
-
-          {!isAndroidNative() && (
-            <div className="p-3 bg-emerald-500/10 border border-emerald-500/30 rounded-xl text-[11px] flex flex-col gap-1 sm:gap-1.5 mt-2">
-              <p className="font-semibold text-emerald-400 flex items-center gap-1.5">
-                <Smartphone className="w-4 h-4 shrink-0 text-emerald-400" />
-                Using Android?
-              </p>
-              <p className="text-neutral-300 leading-relaxed">
-                Android Chrome has limited video codec support. For the best playback experience and codec compatibility, we highly recommend downloading and installing our native Android app:
-              </p>
-              <a
-                href="https://github.com/jinwoo-09/muvidate/releases/download/1.0/Muvidate_1.0.apk"
-                target="_blank"
-                rel="noopener noreferrer"
-                className="text-emerald-400 hover:text-emerald-300 font-semibold underline break-all"
-              >
-                https://github.com/jinwoo-09/muvidate/releases/download/1.0/Muvidate_1.0.apk
-              </a>
-            </div>
-          )}
         </div>
       )}
-
-      {/* Movie Completed Banner */}
       {room.movieCompleted && (
         <div className="p-5 bg-gradient-to-r from-neutral-900 to-neutral-850 border border-neutral-750 rounded-2xl shadow-xl flex flex-col sm:flex-row items-center justify-between gap-4">
           <div className="flex items-center gap-3">
