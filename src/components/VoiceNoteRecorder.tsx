@@ -51,17 +51,35 @@ export function VoiceNoteRecorder({
       const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
       streamRef.current = stream;
 
-      // Check supported MIME type
-      const mimeType = MediaRecorder.isTypeSupported("audio/webm;codecs=opus")
-        ? "audio/webm;codecs=opus"
-        : MediaRecorder.isTypeSupported("audio/ogg;codecs=opus")
-        ? "audio/ogg;codecs=opus"
-        : MediaRecorder.isTypeSupported("audio/mp4")
-        ? "audio/mp4"
-        : "";
+      // Determine best supported MIME type in order of audio preference
+      const candidateTypes = [
+        "audio/webm;codecs=opus",
+        "audio/webm",
+        "audio/ogg;codecs=opus",
+        "audio/ogg",
+        "audio/mp4",
+        "audio/aac",
+        "video/webm;codecs=opus",
+        "video/webm",
+      ];
+      let selectedMimeType = "";
+      if (typeof MediaRecorder !== "undefined" && MediaRecorder.isTypeSupported) {
+        for (const candidate of candidateTypes) {
+          if (MediaRecorder.isTypeSupported(candidate)) {
+            selectedMimeType = candidate;
+            break;
+          }
+        }
+      }
 
-      const options = mimeType ? { mimeType } : undefined;
-      const mediaRecorder = new MediaRecorder(stream, options);
+      const options = selectedMimeType ? { mimeType: selectedMimeType } : undefined;
+      let mediaRecorder: MediaRecorder;
+      try {
+        mediaRecorder = new MediaRecorder(stream, options);
+      } catch (recErr) {
+        console.warn("Failed to init MediaRecorder with options, falling back to default:", recErr);
+        mediaRecorder = new MediaRecorder(stream);
+      }
       mediaRecorderRef.current = mediaRecorder;
       audioChunksRef.current = [];
 
@@ -116,17 +134,22 @@ export function VoiceNoteRecorder({
     try {
       // Create promise for when data is ready
       const blobPromise = new Promise<Blob>((resolve) => {
+        const createRecordedBlob = () => {
+          // Resolve actual recording MIME type from the recorder or captured chunks
+          const actualMime =
+            mediaRecorderRef.current?.mimeType ||
+            (audioChunksRef.current.length > 0 && audioChunksRef.current[0].type) ||
+            "audio/webm";
+
+          const audioBlob = new Blob(audioChunksRef.current, { type: actualMime });
+          resolve(audioBlob);
+        };
+
         if (mediaRecorderRef.current && mediaRecorderRef.current.state !== "inactive") {
-          mediaRecorderRef.current.onstop = () => {
-            const blobType = mediaRecorderRef.current?.mimeType || "audio/webm";
-            const audioBlob = new Blob(audioChunksRef.current, { type: blobType });
-            resolve(audioBlob);
-          };
+          mediaRecorderRef.current.onstop = createRecordedBlob;
           mediaRecorderRef.current.stop();
         } else {
-          const blobType = mediaRecorderRef.current?.mimeType || "audio/webm";
-          const audioBlob = new Blob(audioChunksRef.current, { type: blobType });
-          resolve(audioBlob);
+          createRecordedBlob();
         }
       });
 

@@ -28,6 +28,38 @@ export interface VerifiedFirebaseUser {
 }
 
 /**
+ * Permitted voice note MIME types:
+ * Allows both audio/* MIME types and browser MediaRecorder container outputs (e.g. video/webm, video/mp4)
+ */
+export const ALLOWED_VOICE_NOTE_MIME_TYPES = [
+  // Wildcard supported by Vercel Blob client-upload API
+  "audio/*",
+  // Standard audio MIME types
+  "audio/webm",
+  "audio/webm;codecs=opus",
+  "audio/ogg",
+  "audio/ogg;codecs=opus",
+  "audio/ogg;codecs=vorbis",
+  "audio/mp4",
+  "audio/aac",
+  "audio/x-aac",
+  "audio/m4a",
+  "audio/x-m4a",
+  "audio/wav",
+  "audio/wave",
+  "audio/x-wav",
+  "audio/mpeg",
+  "audio/mp3",
+  "audio/3gpp",
+  // MediaRecorder container MIME types produced by Chrome / Chromium / WebKit for voice recordings
+  "video/webm",
+  "video/webm;codecs=opus",
+  "video/webm;codecs=vp8,opus",
+  "video/webm;codecs=vp9,opus",
+  "video/mp4",
+];
+
+/**
  * Verifies a Firebase ID token cryptographically using pure ESM `jose` against Google's public JWKS.
  * This completely avoids the CommonJS `jwks-rsa` / `ERR_REQUIRE_ESM` incompatibility while
  * strictly enforcing Google's Firebase ID token authentication specifications.
@@ -81,6 +113,24 @@ function extractBearerToken(req: any): string | null {
     return null;
   }
   return authHeader.slice(7).trim();
+}
+
+/**
+ * Validates that client payload specifies a legitimate voice recording MIME type
+ */
+function validateClientPayloadMime(clientPayload: string | null): void {
+  if (!clientPayload) return;
+  try {
+    const parsed = JSON.parse(clientPayload);
+    if (parsed.mimeType && typeof parsed.mimeType === "string") {
+      const base = parsed.mimeType.split(";")[0].trim().toLowerCase();
+      if (!base.startsWith("audio/") && base !== "video/webm" && base !== "video/mp4") {
+        throw new Error(`Unauthorized MIME type in voice-note payload: ${parsed.mimeType}`);
+      }
+    }
+  } catch (e: any) {
+    if (e.message?.includes("Unauthorized MIME type")) throw e;
+  }
 }
 
 /**
@@ -161,21 +211,11 @@ export default async function handler(req: any, res?: any) {
           throw new Error("Invalid pathname: Only voice notes are permitted at this endpoint.");
         }
 
+        // Validate client payload MIME type
+        validateClientPayloadMime(clientPayload);
+
         return {
-          allowedContentTypes: [
-            "audio/webm",
-            "audio/webm;codecs=opus",
-            "audio/ogg",
-            "audio/ogg;codecs=opus",
-            "audio/mp4",
-            "audio/wav",
-            "audio/wave",
-            "audio/x-wav",
-            "audio/mpeg",
-            "audio/mp3",
-            "audio/aac",
-            "audio/x-m4a",
-          ],
+          allowedContentTypes: ALLOWED_VOICE_NOTE_MIME_TYPES,
           maximumSizeInBytes: 15 * 1024 * 1024, // 15MB limit
           addRandomSuffix: true, // Prevents unauthorized overwrites
           allowOverwrite: false,
@@ -257,21 +297,10 @@ async function handleWebRequest(request: Request): Promise<Response> {
           throw new Error("Invalid pathname: Only voice notes are permitted at this endpoint.");
         }
 
+        validateClientPayloadMime(clientPayload);
+
         return {
-          allowedContentTypes: [
-            "audio/webm",
-            "audio/webm;codecs=opus",
-            "audio/ogg",
-            "audio/ogg;codecs=opus",
-            "audio/mp4",
-            "audio/wav",
-            "audio/wave",
-            "audio/x-wav",
-            "audio/mpeg",
-            "audio/mp3",
-            "audio/aac",
-            "audio/x-m4a",
-          ],
+          allowedContentTypes: ALLOWED_VOICE_NOTE_MIME_TYPES,
           maximumSizeInBytes: 15 * 1024 * 1024,
           addRandomSuffix: true,
           allowOverwrite: false,

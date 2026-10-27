@@ -2,6 +2,59 @@ import { upload } from '@vercel/blob/client';
 import { auth } from './firebase';
 
 /**
+ * Determine a clean, valid file extension matching the recorded MIME type.
+ * Accurately maps WebM, MP4, OGG, WAV, MP3, and AAC/M4A formats.
+ */
+export function getExtensionForVoiceMime(mimeType: string): string {
+  const normalized = (mimeType || "").trim().toLowerCase();
+  const base = normalized.split(";")[0].trim();
+
+  if (base.includes("webm")) {
+    return "webm";
+  }
+  if (base.includes("ogg")) {
+    return "ogg";
+  }
+  if (base.includes("mp4") || base === "video/mp4" || base === "audio/mp4") {
+    return "mp4";
+  }
+  if (base.includes("wav")) {
+    return "wav";
+  }
+  if (base.includes("mpeg") || base.includes("mp3")) {
+    return "mp3";
+  }
+  if (base.includes("aac") || base.includes("m4a")) {
+    return "m4a";
+  }
+  return "webm";
+}
+
+/**
+ * Validates that an audio blob is an allowed voice-note format before initiating upload.
+ */
+export function validateVoiceBlob(blob: Blob): string {
+  const rawType = (blob.type || "").trim();
+  const baseType = rawType.split(";")[0].trim().toLowerCase();
+
+  // Allow standard audio MIME types and browser WebM / MP4 MediaRecorder outputs
+  const isAllowed =
+    baseType.startsWith("audio/") ||
+    baseType === "video/webm" ||
+    baseType === "video/mp4" ||
+    baseType === "";
+
+  if (!isAllowed) {
+    throw new Error(
+      `Invalid voice note format: "${blob.type}". Only voice/audio recordings are allowed.`
+    );
+  }
+
+  // If MIME type is unspecified, default to audio/webm
+  return rawType || "audio/webm";
+}
+
+/**
  * Upload voice note directly to Vercel Blob from the client browser.
  * Uses official @vercel/blob/client upload() API authorized by /api/upload.
  */
@@ -14,22 +67,14 @@ export async function uploadVoiceNoteToBlob(
     throw new Error("You must be logged in to send a voice note.");
   }
 
+  // Validate the audio blob format and resolve its MIME type
+  const resolvedContentType = validateVoiceBlob(audioBlob);
+
   // Get fresh Firebase ID token to verify user identity on the serverless authorization endpoint
   const idToken = await currentUser.getIdToken(true);
 
-  // Determine file extension from audio MIME type
-  let ext = "webm";
-  if (audioBlob.type.includes("mp4")) {
-    ext = "mp4";
-  } else if (audioBlob.type.includes("ogg")) {
-    ext = "ogg";
-  } else if (audioBlob.type.includes("wav")) {
-    ext = "wav";
-  } else if (audioBlob.type.includes("mpeg") || audioBlob.type.includes("mp3")) {
-    ext = "mp3";
-  } else if (audioBlob.type.includes("aac") || audioBlob.type.includes("m4a")) {
-    ext = "m4a";
-  }
+  // Determine file extension matching the actual recording format
+  const ext = getExtensionForVoiceMime(resolvedContentType);
 
   // Generate a distinct pathname under voice-notes/
   const randomSuffix = Math.random().toString(36).substring(2, 8);
@@ -41,13 +86,14 @@ export async function uploadVoiceNoteToBlob(
 
   const blobResult = await upload(pathname, audioBlob, {
     access: "public",
+    contentType: resolvedContentType,
     handleUploadUrl: "/api/upload",
     headers: {
       Authorization: `Bearer ${idToken}`,
     },
     clientPayload: JSON.stringify({
       uid: currentUser.uid,
-      mimeType: audioBlob.type,
+      mimeType: resolvedContentType,
       size: audioBlob.size,
       timestamp: Date.now(),
     }),
