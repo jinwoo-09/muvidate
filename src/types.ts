@@ -53,8 +53,10 @@ export interface ChatMessage {
   photoURL?: string;
   type: 'text' | 'voice' | 'system';
   text?: string;
-  audioUrl?: string;
+  audioUrl?: string | null;
   createdAt: number;
+  expiresAt?: number;
+  isExpired?: boolean;
 }
 
 export interface Room {

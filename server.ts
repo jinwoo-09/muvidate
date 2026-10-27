@@ -1,6 +1,7 @@
 import express from 'express';
 import { createServer as createViteServer } from 'vite';
 import uploadHandler from './api/upload';
+import cleanupVoiceNotesHandler from './api/cleanup-voice-notes';
 
 async function startServer() {
   const app = express();
@@ -12,6 +13,11 @@ async function startServer() {
   // Route /api/upload to the serverless Vercel Blob authorization handler
   app.all('/api/upload', (req, res) => {
     return uploadHandler(req, res);
+  });
+
+  // Route /api/cleanup-voice-notes to the serverless expiration cleanup handler
+  app.all('/api/cleanup-voice-notes', (req, res) => {
+    return cleanupVoiceNotesHandler(req, res);
   });
 
   // Health check endpoint

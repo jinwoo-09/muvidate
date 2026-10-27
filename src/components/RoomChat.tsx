@@ -5,7 +5,7 @@ import { ref, onValue, off, push, set, update } from "firebase/database";
 import { ChatMessage } from "../types";
 import { VoiceNoteRecorder } from "./VoiceNoteRecorder";
 import { VoiceNotePlayer } from "./VoiceNotePlayer";
-import { Send, MessageSquare, Shield, Smile, X } from "lucide-react";
+import { Send, MessageSquare, Shield, Smile, X, Clock } from "lucide-react";
 
 // In-memory cache for user avatars across the app session to avoid redundant Firestore queries
 const avatarMemoryCache = new Map<string, string>();
@@ -148,14 +148,17 @@ export function RoomChat({
     const chatRef = ref(rtdb, `rooms/${roomCode}/chat`);
     const newMsgRef = push(chatRef);
     const photoURL = profile.photoURL || avatarMemoryCache.get(user.uid) || "";
+    const now = Date.now();
     const msg: ChatMessage = {
-      id: newMsgRef.key || Date.now().toString(),
+      id: newMsgRef.key || now.toString(),
       uid: user.uid,
       username: profile.username,
       photoURL,
       type: "voice",
       audioUrl,
-      createdAt: Date.now()
+      createdAt: now,
+      expiresAt: now + 24 * 60 * 60 * 1000,
+      isExpired: false
     };
     await set(newMsgRef, msg);
 
@@ -269,8 +272,15 @@ export function RoomChat({
                     </span>
                   </div>
 
-                  {msg.type === "voice" && msg.audioUrl ? (
-                    <VoiceNotePlayer audioUrl={msg.audioUrl} />
+                  {msg.type === "voice" ? (
+                    msg.isExpired || !msg.audioUrl || (msg.createdAt && Date.now() - msg.createdAt >= 24 * 60 * 60 * 1000) ? (
+                      <div className="flex items-center gap-2 px-3 py-2 rounded-xl bg-neutral-900/90 border border-neutral-800 text-neutral-400 text-xs italic">
+                        <Clock className="w-3.5 h-3.5 text-neutral-500 shrink-0" />
+                        <span>Voice note expired (24h limit)</span>
+                      </div>
+                    ) : (
+                      <VoiceNotePlayer audioUrl={msg.audioUrl} />
+                    )
                   ) : (
                     <div
                       className={`px-3.5 py-2 rounded-2xl text-xs leading-relaxed break-words shadow-sm ${
