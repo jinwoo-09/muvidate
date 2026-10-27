@@ -21,6 +21,62 @@ interface MovieDetailModalProps {
   onEditMovie?: (movie: Movie) => void;
 }
 
+/**
+ * Extracts YouTube video ID and returns a standard embed URL.
+ * Supports watch?v=, youtu.be/, shorts/, and embed/ URLs.
+ * Returns null if not a valid YouTube link so standard video player is used.
+ */
+function getYouTubeEmbedUrl(url?: string): string | null {
+  if (!url || typeof url !== "string") return null;
+  const trimmed = url.trim();
+  if (!trimmed) return null;
+
+  try {
+    const isYouTube = /(?:youtube\.com|youtu\.be)/i.test(trimmed);
+    if (!isYouTube) return null;
+
+    let videoId: string | null = null;
+
+    // Pattern 1: youtu.be/VIDEO_ID
+    const shortMatch = trimmed.match(/(?:youtu\.be\/)([a-zA-Z0-9_-]{11})/i);
+    if (shortMatch && shortMatch[1]) {
+      videoId = shortMatch[1];
+    }
+
+    // Pattern 2: youtube.com/watch?v=VIDEO_ID
+    if (!videoId) {
+      const watchMatch = trimmed.match(/[?&]v=([a-zA-Z0-9_-]{11})/i);
+      if (watchMatch && watchMatch[1]) {
+        videoId = watchMatch[1];
+      }
+    }
+
+    // Pattern 3: youtube.com/shorts/VIDEO_ID
+    if (!videoId) {
+      const shortsMatch = trimmed.match(/(?:youtube\.com\/shorts\/)([a-zA-Z0-9_-]{11})/i);
+      if (shortsMatch && shortsMatch[1]) {
+        videoId = shortsMatch[1];
+      }
+    }
+
+    // Pattern 4: youtube.com/embed/VIDEO_ID
+    if (!videoId) {
+      const embedMatch = trimmed.match(/(?:youtube\.com\/embed\/)([a-zA-Z0-9_-]{11})/i);
+      if (embedMatch && embedMatch[1]) {
+        videoId = embedMatch[1];
+      }
+    }
+
+    if (videoId) {
+      return `https://www.youtube.com/embed/${videoId}`;
+    }
+  } catch {
+    return null;
+  }
+
+  return null;
+}
+
 export function MovieDetailModal({
   movie,
   onClose,
@@ -38,6 +94,7 @@ export function MovieDetailModal({
     : [];
 
   const detailCoverUrl = (movie.cover && movie.cover.trim() !== "") ? movie.cover : movie.poster;
+  const youtubeEmbedUrl = getYouTubeEmbedUrl(movie.trailer);
 
   return (
     <div className="fixed inset-0 z-[20000] flex items-center justify-center p-3 sm:p-6 bg-black/90 backdrop-blur-md overflow-y-auto">
@@ -142,13 +199,23 @@ export function MovieDetailModal({
                     </h4>
                   </div>
                   <div className="w-full aspect-video rounded-2xl overflow-hidden bg-black border border-neutral-800 shadow-xl">
-                    <video
-                      src={movie.trailer.trim()}
-                      controls
-                      playsInline
-                      preload="metadata"
-                      className="w-full h-full object-contain"
-                    />
+                    {youtubeEmbedUrl ? (
+                      <iframe
+                        src={youtubeEmbedUrl}
+                        title={`${movie.Title} Official Trailer`}
+                        allow="accelerometer; autoplay; clipboard-write; encrypted-media; gyroscope; picture-in-picture; web-share"
+                        allowFullScreen
+                        className="w-full h-full border-0"
+                      />
+                    ) : (
+                      <video
+                        src={movie.trailer.trim()}
+                        controls
+                        playsInline
+                        preload="metadata"
+                        className="w-full h-full object-contain"
+                      />
+                    )}
                   </div>
                 </div>
               )}
