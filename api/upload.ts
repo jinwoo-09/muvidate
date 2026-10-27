@@ -1,57 +1,76 @@
 import { handleUpload, type HandleUploadBody } from '@vercel/blob/client';
-import { initializeApp, getApps, cert, type App } from 'firebase-admin/app';
-import { getAuth, type DecodedIdToken } from 'firebase-admin/auth';
+import { createRemoteJWKSet, jwtVerify } from 'jose';
 
-// Initialize Firebase Admin singleton for server-side ID token verification
-function getFirebaseAdmin(): App {
-  const existingApps = getApps();
-  if (existingApps.length > 0 && existingApps[0]) {
-    return existingApps[0];
+// Google's official public JWKS endpoint for Firebase Authentication
+const GOOGLE_FIREBASE_JWKS_URL = new URL(
+  'https://www.googleapis.com/service_accounts/v1/jwk/securetoken@system.gserviceaccount.com'
+);
+
+let cachedJWKS: ReturnType<typeof createRemoteJWKSet> | null = null;
+
+function getFirebaseJWKS() {
+  if (!cachedJWKS) {
+    cachedJWKS = createRemoteJWKSet(GOOGLE_FIREBASE_JWKS_URL, {
+      cacheMaxAge: 10 * 60 * 1000, // 10 minutes cache
+      cooldownDuration: 30 * 1000, // 30 seconds cooldown
+    });
   }
+  return cachedJWKS;
+}
 
-  const projectId = 
-    process.env.FIREBASE_PROJECT_ID || 
-    process.env.VITE_FIREBASE_PROJECT_ID || 
+export interface VerifiedFirebaseUser {
+  uid: string;
+  email?: string;
+  email_verified?: boolean;
+  name?: string;
+  picture?: string;
+  [key: string]: any;
+}
+
+/**
+ * Verifies a Firebase ID token cryptographically using pure ESM `jose` against Google's public JWKS.
+ * This completely avoids the CommonJS `jwks-rsa` / `ERR_REQUIRE_ESM` incompatibility while
+ * strictly enforcing Google's Firebase ID token authentication specifications.
+ */
+export async function verifyFirebaseIdToken(idToken: string): Promise<VerifiedFirebaseUser> {
+  const projectId =
+    process.env.FIREBASE_PROJECT_ID ||
+    process.env.VITE_FIREBASE_PROJECT_ID ||
     "movie-date-1";
 
-  // Check for service account JSON or individual credentials if provided in Vercel env
-  if (process.env.FIREBASE_SERVICE_ACCOUNT_KEY) {
-    try {
-      const creds = JSON.parse(process.env.FIREBASE_SERVICE_ACCOUNT_KEY);
-      return initializeApp({
-        credential: cert(creds),
-        projectId: creds.project_id || projectId,
-      });
-    } catch (e) {
-      console.warn("Failed to parse FIREBASE_SERVICE_ACCOUNT_KEY, falling back to projectId:", e);
-    }
-  }
+  const expectedIssuer = `https://securetoken.google.com/${projectId}`;
+  const jwks = getFirebaseJWKS();
 
-  if (process.env.FIREBASE_CLIENT_EMAIL && process.env.FIREBASE_PRIVATE_KEY) {
-    try {
-      return initializeApp({
-        credential: cert({
-          projectId,
-          clientEmail: process.env.FIREBASE_CLIENT_EMAIL,
-          privateKey: process.env.FIREBASE_PRIVATE_KEY.replace(/\\n/g, '\n'),
-        }),
-        projectId,
-      });
-    } catch (e) {
-      console.warn("Failed to init with FIREBASE_CLIENT_EMAIL/PRIVATE_KEY:", e);
-    }
-  }
-
-  // Fallback: Initialize with projectId. Firebase Admin verifies Google-issued ID tokens
-  // against Google's public certificates.
-  return initializeApp({
-    projectId,
+  const { payload } = await jwtVerify(idToken, jwks, {
+    issuer: expectedIssuer,
+    audience: projectId,
+    algorithms: ['RS256'],
+    clockTolerance: 10, // 10 seconds leeway
   });
+
+  const uid = payload.sub;
+  if (!uid || typeof uid !== 'string') {
+    throw new Error('Unauthorized: Firebase ID token has invalid or missing "sub" (uid) claim.');
+  }
+
+  const nowInSeconds = Math.floor(Date.now() / 1000);
+  if (typeof payload.auth_time === 'number' && payload.auth_time > nowInSeconds + 300) {
+    throw new Error('Unauthorized: Firebase ID token auth_time is in the future.');
+  }
+
+  return {
+    uid,
+    email: typeof payload.email === 'string' ? payload.email : undefined,
+    email_verified: Boolean(payload.email_verified),
+    name: typeof payload.name === 'string' ? payload.name : undefined,
+    picture: typeof payload.picture === 'string' ? payload.picture : undefined,
+    ...payload,
+  };
 }
 
 function extractBearerToken(req: any): string | null {
   let authHeader = "";
-  if (req.headers) {
+  if (req && req.headers) {
     if (typeof req.headers.get === "function") {
       authHeader = req.headers.get("authorization") || req.headers.get("Authorization") || "";
     } else {
@@ -68,7 +87,7 @@ function extractBearerToken(req: any): string | null {
  * Node.js / Express / Vercel Serverless Function handler
  */
 export default async function handler(req: any, res?: any) {
-  // If called in a Web standard Request/Response environment
+  // If called in a Web standard Request/Response environment (Vercel Edge or Web fetch)
   if (req instanceof Request || (req.headers && typeof req.headers.get === "function" && !res)) {
     return handleWebRequest(req);
   }
@@ -90,7 +109,6 @@ export default async function handler(req: any, res?: any) {
   try {
     let body = req.body;
     if (!body) {
-      // Buffer raw body if not parsed by middleware
       const buffers: Buffer[] = [];
       for await (const chunk of req) {
         buffers.push(typeof chunk === "string" ? Buffer.from(chunk) : chunk);
@@ -103,8 +121,8 @@ export default async function handler(req: any, res?: any) {
 
     const bodyObj = body as HandleUploadBody;
 
-    // For token generation from the client, strictly enforce authenticated user session
-    let decodedUser: DecodedIdToken | null = null;
+    // For token generation from the client, strictly enforce authenticated Firebase user session
+    let decodedUser: VerifiedFirebaseUser | null = null;
     if (bodyObj.type === "blob.generate-client-token") {
       const idToken = extractBearerToken(req);
       if (!idToken) {
@@ -114,8 +132,7 @@ export default async function handler(req: any, res?: any) {
       }
 
       try {
-        const adminApp = getFirebaseAdmin();
-        decodedUser = await getAuth(adminApp).verifyIdToken(idToken);
+        decodedUser = await verifyFirebaseIdToken(idToken);
         if (!decodedUser || !decodedUser.uid) {
           return res.status(401).json({
             error: "Unauthorized: Invalid Firebase session.",
@@ -139,7 +156,7 @@ export default async function handler(req: any, res?: any) {
           throw new Error("Unauthorized: User not authenticated.");
         }
 
-        // Restrict path to voice notes
+        // Restrict path strictly to voice notes
         if (!pathname || (!pathname.startsWith("voice-notes/") && !pathname.startsWith("voice_"))) {
           throw new Error("Invalid pathname: Only voice notes are permitted at this endpoint.");
         }
@@ -201,7 +218,7 @@ async function handleWebRequest(request: Request): Promise<Response> {
   try {
     const bodyObj = (await request.json()) as HandleUploadBody;
 
-    let decodedUser: DecodedIdToken | null = null;
+    let decodedUser: VerifiedFirebaseUser | null = null;
     if (bodyObj.type === "blob.generate-client-token") {
       const idToken = extractBearerToken(request);
       if (!idToken) {
@@ -212,8 +229,7 @@ async function handleWebRequest(request: Request): Promise<Response> {
       }
 
       try {
-        const adminApp = getFirebaseAdmin();
-        decodedUser = await getAuth(adminApp).verifyIdToken(idToken);
+        decodedUser = await verifyFirebaseIdToken(idToken);
         if (!decodedUser || !decodedUser.uid) {
           return Response.json(
             { error: "Unauthorized: Invalid Firebase session." },
