@@ -1,5 +1,5 @@
 import React, { useState, useRef, useEffect } from "react";
-import { Play, Pause, Volume2, AlertCircle } from "lucide-react";
+import { Play, Pause, AlertCircle, ExternalLink } from "lucide-react";
 
 interface VoiceNotePlayerProps {
   audioUrl: string;
@@ -13,6 +13,11 @@ export function VoiceNotePlayer({ audioUrl }: VoiceNotePlayerProps) {
   const audioRef = useRef<HTMLAudioElement | null>(null);
 
   useEffect(() => {
+    // Reset state when audioUrl changes
+    setLoadError(false);
+    setIsPlaying(false);
+    setCurrentTime(0);
+
     const audio = audioRef.current;
     if (!audio) return;
 
@@ -80,9 +85,36 @@ export function VoiceNotePlayer({ audioUrl }: VoiceNotePlayerProps) {
 
   if (loadError) {
     return (
-      <div className="flex items-center gap-2 p-2 bg-neutral-900/90 border border-neutral-800 rounded-xl text-neutral-400 text-xs">
-        <AlertCircle className="w-3.5 h-3.5 text-rose-400 shrink-0" />
-        <span>Audio note unavailable</span>
+      <div className="flex items-center justify-between gap-2 p-2 bg-neutral-900/90 border border-neutral-800 rounded-xl text-neutral-400 text-xs min-w-[200px] max-w-[280px]">
+        <div className="flex items-center gap-1.5 truncate">
+          <AlertCircle className="w-3.5 h-3.5 text-amber-400 shrink-0" />
+          <span className="truncate">Audio unavailable</span>
+        </div>
+        <div className="flex items-center gap-1.5 shrink-0">
+          <button
+            type="button"
+            onClick={() => {
+              setLoadError(false);
+              if (audioRef.current) {
+                audioRef.current.load();
+              }
+            }}
+            className="px-2 py-0.5 text-[10px] font-medium bg-neutral-800 hover:bg-neutral-700 text-neutral-200 rounded transition"
+          >
+            Retry
+          </button>
+          {audioUrl && (
+            <a
+              href={audioUrl}
+              target="_blank"
+              rel="noopener noreferrer"
+              className="p-1 hover:text-white transition"
+              title="Open audio link directly"
+            >
+              <ExternalLink className="w-3.5 h-3.5" />
+            </a>
+          )}
+        </div>
       </div>
     );
   }

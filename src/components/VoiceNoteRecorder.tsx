@@ -1,6 +1,6 @@
 import React, { useState, useRef, useEffect } from "react";
 import { Mic, Square, Trash2, Send, Loader2, AlertCircle } from "lucide-react";
-import { uploadFileToWorker } from "../lib/workerApi";
+import { uploadVoiceNoteToBlob } from "../lib/blobVoiceUpload";
 
 interface VoiceNoteRecorderProps {
   onVoiceNoteUploaded: (audioUrl: string) => Promise<void>;
@@ -16,6 +16,7 @@ export function VoiceNoteRecorder({
   const [isRecording, setIsRecording] = useState(false);
   const [recordDuration, setRecordDuration] = useState(0);
   const [isUploading, setIsUploading] = useState(false);
+  const [uploadProgress, setUploadProgress] = useState(0);
   const [error, setError] = useState<string | null>(null);
 
   const mediaRecorderRef = useRef<MediaRecorder | null>(null);
@@ -139,10 +140,11 @@ export function VoiceNoteRecorder({
         return;
       }
 
-      // Upload via Worker API
-      const ext = audioBlob.type.includes("mp4") ? "mp4" : "webm";
-      const filename = `voice_${Date.now()}.${ext}`;
-      const directAudioUrl = await uploadFileToWorker(audioBlob, filename);
+      // Upload via Vercel Blob client-upload API
+      setUploadProgress(0);
+      const directAudioUrl = await uploadVoiceNoteToBlob(audioBlob, (pct) => {
+        setUploadProgress(pct);
+      });
 
       await onVoiceNoteUploaded(directAudioUrl);
     } catch (err: any) {
@@ -150,6 +152,7 @@ export function VoiceNoteRecorder({
       setError(err.message || "Failed to upload voice note.");
     } finally {
       setIsUploading(false);
+      setUploadProgress(0);
       setRecordDuration(0);
       audioChunksRef.current = [];
     }
@@ -214,7 +217,7 @@ export function VoiceNoteRecorder({
       ) : isUploading ? (
         <div className="flex items-center gap-2 px-3 py-2 bg-neutral-900 border border-neutral-800 rounded-xl text-neutral-400 text-xs">
           <Loader2 className="w-4 h-4 animate-spin text-rose-500" />
-          <span>Uploading voice note...</span>
+          <span>{uploadProgress > 0 ? `Uploading voice note (${uploadProgress}%)...` : "Uploading voice note..."}</span>
         </div>
       ) : (
         <button
