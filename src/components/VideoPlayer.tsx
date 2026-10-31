@@ -18,11 +18,21 @@ import {
   Film,
   Layers,
   ChevronDown,
-  Subtitles
+  Subtitles,
+  Settings
 } from "lucide-react";
+import Hls from "hls.js";
 import { rtdb } from "../lib/firebase";
 import { ref, onChildAdded, off, get } from "firebase/database";
 import { SeriesStructure, extractSeriesStructure, getEpisodeUrl, getSubtitleForEpisode, convertSrtToVtt } from "../lib/seriesUtils";
+import { 
+  isHlsUrl, 
+  isHlsJsSupported, 
+  isNativeHlsSupported, 
+  formatQualityLevels, 
+  sanitizeMediaUrl, 
+  HlsQualityOption 
+} from "../lib/hlsUtils";
 
 export interface VideoPlayerProps {
   src: string;
@@ -94,10 +104,21 @@ function VideoPlayerComponent({
     isSubtitlesEnabledRef.current = isSubtitlesEnabled;
   }, [isSubtitlesEnabled]);
 
+  // HLS Quality and playback engine states
+  const [showQualityMenu, setShowQualityMenu] = useState(false);
+  const [availableQualities, setAvailableQualities] = useState<HlsQualityOption[]>([]);
+  const [selectedQuality, setSelectedQuality] = useState<number>(-1); // -1 is Auto
+  const [currentQualityHeight, setCurrentQualityHeight] = useState<number | null>(null);
+
+  const hlsRef = useRef<Hls | null>(null);
+  const networkRetryCountRef = useRef(0);
+  const mediaRetryCountRef = useRef(0);
+
   useEffect(() => {
     const handleGlobalClick = () => {
       setShowAudioMenu(false);
       setShowDisplayMenu(false);
+      setShowQualityMenu(false);
     };
     window.addEventListener("click", handleGlobalClick);
     return () => {
@@ -162,18 +183,6 @@ function VideoPlayerComponent({
   syncStateRef.current = syncState;
   const hasInitialSyncAppliedRef = useRef(false);
 
-  // Single-shot buffering recovery state tracking
-  const wasBufferingRef = useRef(false);
-  const isRecoveringFromBufferRef = useRef(false);
-  const currentMediaKeyRef = useRef(`${roomCode || ""}:${src}`);
-
-  useEffect(() => {
-    currentMediaKeyRef.current = `${roomCode || ""}:${src}`;
-    wasBufferingRef.current = false;
-    isRecoveringFromBufferRef.current = false;
-    hasInitialSyncAppliedRef.current = false;
-  }, [roomCode, src]);
-
   const onVideoEndedRef = useRef(onVideoEnded);
   onVideoEndedRef.current = onVideoEnded;
 
@@ -184,8 +193,6 @@ function VideoPlayerComponent({
     if (propSeriesStructure) return propSeriesStructure;
     return extractSeriesStructure(src);
   }, [propSeriesStructure, src]);
-
-
 
   const [localSeason, setLocalSeason] = useState(1);
   const [localEpisode, setLocalEpisode] = useState(1);
@@ -202,6 +209,31 @@ function VideoPlayerComponent({
   ) || effectiveSeries.seasons[0];
 
   const currentSeasonEpisodes = currentSeasonData ? currentSeasonData.episodes : [];
+
+  // Resolve effective media source URL (handling room episodes or solo series episode switches)
+  const effectiveMediaSrc = React.useMemo(() => {
+    if (onSelectEpisode) {
+      return src;
+    }
+    if (effectiveSeries.isSeries) {
+      const s = effectiveSeries.seasons.find((sn) => sn.seasonNumber === selectedSeasonNum);
+      const ep = s?.episodes.find((e) => e.episodeNumber === selectedEpisodeNum);
+      if (ep && ep.url) return ep.url;
+    }
+    return src;
+  }, [onSelectEpisode, src, effectiveSeries, selectedSeasonNum, selectedEpisodeNum]);
+
+  // Single-shot buffering recovery state tracking
+  const wasBufferingRef = useRef(false);
+  const isRecoveringFromBufferRef = useRef(false);
+  const currentMediaKeyRef = useRef(`${roomCode || ""}:${effectiveMediaSrc}`);
+
+  useEffect(() => {
+    currentMediaKeyRef.current = `${roomCode || ""}:${effectiveMediaSrc}`;
+    wasBufferingRef.current = false;
+    isRecoveringFromBufferRef.current = false;
+    hasInitialSyncAppliedRef.current = false;
+  }, [roomCode, effectiveMediaSrc]);
 
   // Close menus when clicking outside
   useEffect(() => {
@@ -238,8 +270,7 @@ function VideoPlayerComponent({
     } else {
       setLocalSeason(seasonNum);
       setLocalEpisode(firstEpNum);
-      if (videoRef.current && firstEpUrl) {
-        videoRef.current.src = firstEpUrl;
+      if (videoRef.current) {
         videoRef.current.currentTime = 0;
       }
     }
@@ -257,11 +288,25 @@ function VideoPlayerComponent({
       onSelectEpisode(selectedSeasonNum, episodeNum, epUrl);
     } else {
       setLocalEpisode(episodeNum);
-      if (videoRef.current && epUrl) {
-        videoRef.current.src = epUrl;
+      if (videoRef.current) {
         videoRef.current.currentTime = 0;
       }
     }
+  };
+
+  const handleQualitySelect = (qualityId: number) => {
+    if (hlsRef.current) {
+      hlsRef.current.currentLevel = qualityId;
+      setSelectedQuality(qualityId);
+      if (qualityId === -1) {
+        console.log("[HLS.js] Switched to Auto (adaptive bitrate selection)");
+      } else {
+        const lvl = hlsRef.current.levels[qualityId];
+        console.log(`[HLS.js] Switched to manual quality: ${lvl?.height || qualityId}p`);
+      }
+    }
+    setShowQualityMenu(false);
+    resetControlsTimeout();
   };
 
   // Resolve current active subtitle URL (following selected episode)
@@ -466,6 +511,7 @@ function VideoPlayerComponent({
       setShowControls(false);
       setShowAudioMenu(false);
       setShowDisplayMenu(false);
+      setShowQualityMenu(false);
       setIsSeasonMenuOpen(false);
       setIsEpisodeMenuOpen(false);
       controlsTimeoutRef.current = null;
@@ -475,8 +521,21 @@ function VideoPlayerComponent({
   const resetControlsTimeoutRef = useRef(resetControlsTimeout);
   resetControlsTimeoutRef.current = resetControlsTimeout;
 
-  // Audio Tracks Detection (where browser supports HTML5 audioTracks API)
+  // Audio Tracks Detection (where browser supports HTML5 audioTracks API or HLS manifest)
   const detectAudioTracks = useCallback(() => {
+    // If HLS.js is handling audio tracks, preserve HLS audio tracks
+    if (isHlsUrl(effectiveMediaSrc) && isHlsJsSupported() && hlsRef.current) {
+      if (hlsRef.current.audioTracks && hlsRef.current.audioTracks.length > 0) {
+        const tracks = hlsRef.current.audioTracks.map((t, idx) => ({
+          index: idx,
+          label: t.name || t.lang || `Track ${idx + 1}`,
+          enabled: idx === hlsRef.current?.audioTrack,
+        }));
+        setAvailableAudioTracks(tracks);
+        return;
+      }
+    }
+
     const video = videoRef.current as any;
     if (video && video.audioTracks && video.audioTracks.length > 0) {
       const tracks = [];
@@ -494,7 +553,7 @@ function VideoPlayerComponent({
         { index: 0, label: "Default Audio", enabled: true }
       ]);
     }
-  }, []);
+  }, [effectiveMediaSrc]);
 
   const detectAudioTracksRef = useRef(detectAudioTracks);
   detectAudioTracksRef.current = detectAudioTracks;
@@ -581,16 +640,23 @@ function VideoPlayerComponent({
     // Match audio track index if provided and supported
     if (
       syncState.audioTrackIndex !== undefined &&
-      (video as any).audioTracks &&
-      (video as any).audioTracks.length > syncState.audioTrackIndex &&
       currentAudioTrack !== syncState.audioTrackIndex
     ) {
-      const audioTracks = (video as any).audioTracks;
-      for (let i = 0; i < audioTracks.length; i++) {
-        audioTracks[i].enabled = i === syncState.audioTrackIndex;
+      if (hlsRef.current && hlsRef.current.audioTracks.length > syncState.audioTrackIndex) {
+        hlsRef.current.audioTrack = syncState.audioTrackIndex;
+        setCurrentAudioTrack(syncState.audioTrackIndex);
+        hasMeaningfulSync = true;
+      } else if (
+        (video as any).audioTracks &&
+        (video as any).audioTracks.length > syncState.audioTrackIndex
+      ) {
+        const audioTracks = (video as any).audioTracks;
+        for (let i = 0; i < audioTracks.length; i++) {
+          audioTracks[i].enabled = i === syncState.audioTrackIndex;
+        }
+        setCurrentAudioTrack(syncState.audioTrackIndex);
+        hasMeaningfulSync = true;
       }
-      setCurrentAudioTrack(syncState.audioTrackIndex);
-      hasMeaningfulSync = true;
     }
 
     if (hasMeaningfulSync) {
@@ -598,7 +664,226 @@ function VideoPlayerComponent({
     }
   }, [syncState, currentUserId, currentAudioTrack, triggerSyncIndicator]);
 
-  // Video listeners: mounted with [src] to prevent teardown/re-attach on unrelated renders (e.g. chat)
+  // HLS.js Lifecycle & Playback Engine Effect
+  useEffect(() => {
+    const video = videoRef.current;
+    if (!video) return;
+
+    // Reset quality states on media source change
+    setAvailableQualities([]);
+    setSelectedQuality(-1);
+    setCurrentQualityHeight(null);
+    setShowQualityMenu(false);
+    networkRetryCountRef.current = 0;
+    mediaRetryCountRef.current = 0;
+
+    const isHls = isHlsUrl(effectiveMediaSrc);
+    const safeUrl = sanitizeMediaUrl(effectiveMediaSrc);
+
+    // Destroy existing HLS instance if present
+    if (hlsRef.current) {
+      console.log(`[HLS.js] Cleaning up previous HLS instance before loading: ${safeUrl}`);
+      try {
+        hlsRef.current.detachMedia();
+        hlsRef.current.destroy();
+      } catch (err) {
+        console.warn("[HLS.js] Error cleaning up HLS instance:", err);
+      }
+      hlsRef.current = null;
+    }
+
+    if (!isHls) {
+      // Ordinary MP4, WebM, or local Blob URL
+      if (video.src !== effectiveMediaSrc) {
+        video.src = effectiveMediaSrc;
+      }
+      return;
+    }
+
+    // HLS Stream (.m3u8)
+    if (isHlsJsSupported()) {
+      console.log(`[HLS.js] Initializing HLS.js engine for stream: ${safeUrl}`);
+
+      const hls = new Hls({
+        enableWorker: true,
+        lowLatencyMode: true,
+        backBufferLength: 90,
+        maxBufferLength: 30,
+        maxMaxBufferLength: 60,
+      });
+
+      hlsRef.current = hls;
+
+      hls.on(Hls.Events.MEDIA_ATTACHED, () => {
+        console.log(`[HLS.js] Media attached to video element for: ${safeUrl}`);
+      });
+
+      hls.on(Hls.Events.MANIFEST_PARSED, (event, data) => {
+        console.log(
+          `[HLS.js] Manifest loaded for ${safeUrl}: ${data.levels.length} quality level(s), ${hls.audioTracks?.length || 0} audio track(s).`
+        );
+        setPlaybackError(null);
+        setIsBuffering(false);
+
+        // Format and set quality levels
+        const qualityOptions = formatQualityLevels(data.levels);
+        setAvailableQualities(qualityOptions);
+
+        // Detect and set alternate audio tracks
+        if (hls.audioTracks && hls.audioTracks.length > 0) {
+          const tracks = hls.audioTracks.map((t, idx) => ({
+            index: idx,
+            label: t.name || t.lang || `Track ${idx + 1}`,
+            enabled: idx === hls.audioTrack,
+          }));
+          setAvailableAudioTracks(tracks);
+          setCurrentAudioTrack(hls.audioTrack >= 0 ? hls.audioTrack : 0);
+        }
+
+        // Apply room synchronization timeline upon manifest parsed
+        if (syncStateRef.current) {
+          const sync = syncStateRef.current;
+          const now = Date.now();
+          const elapsed = sync.isPlaying && sync.lastUpdated
+            ? Math.max(0, (now - sync.lastUpdated) / 1000)
+            : 0;
+          const expectedTime = sync.isPlaying
+            ? Math.max(0, sync.currentTime + elapsed)
+            : Math.max(0, sync.currentTime);
+
+          if (expectedTime > 0) {
+            isApplyingRemoteSyncRef.current = true;
+            video.currentTime = expectedTime;
+            setCurrentTime(expectedTime);
+            setTimeout(() => {
+              isApplyingRemoteSyncRef.current = false;
+            }, 200);
+          }
+
+          if (sync.isPlaying && video.paused) {
+            isApplyingRemoteSyncRef.current = true;
+            video.play().catch(() => {}).finally(() => {
+              setTimeout(() => {
+                isApplyingRemoteSyncRef.current = false;
+              }, 200);
+            });
+          } else if (!sync.isPlaying && !video.paused) {
+            video.pause();
+          }
+        }
+      });
+
+      hls.on(Hls.Events.LEVEL_SWITCHED, (event, data) => {
+        const level = hls.levels[data.level];
+        if (level && level.height) {
+          setCurrentQualityHeight(level.height);
+          console.log(`[HLS.js] Switched to resolution: ${level.height}p (level ${data.level})`);
+        }
+      });
+
+      hls.on(Hls.Events.AUDIO_TRACKS_UPDATED, (event, data) => {
+        if (data.audioTracks && data.audioTracks.length > 0) {
+          const tracks = data.audioTracks.map((t, idx) => ({
+            index: idx,
+            label: t.name || t.lang || `Track ${idx + 1}`,
+            enabled: idx === hls.audioTrack,
+          }));
+          setAvailableAudioTracks(tracks);
+        }
+      });
+
+      hls.on(Hls.Events.AUDIO_TRACK_SWITCHED, (event, data) => {
+        setCurrentAudioTrack(data.id);
+      });
+
+      hls.on(Hls.Events.ERROR, (event, data) => {
+        if (data.fatal) {
+          console.warn(`[HLS.js] Fatal Error for ${safeUrl}:`, data.type, data.details);
+          switch (data.type) {
+            case Hls.ErrorTypes.NETWORK_ERROR: {
+              const isCorsFailure =
+                data.response?.code === 0 ||
+                (data.details === Hls.ErrorDetails.MANIFEST_LOAD_ERROR && (!data.response || data.response.code === 0));
+
+              if (isCorsFailure) {
+                console.error(`[HLS.js] CORS access blocked for stream: ${safeUrl}`);
+                setPlaybackError(
+                  "Cross-Origin (CORS) restriction: The HLS streaming server blocked access from this domain. Ensure 'Access-Control-Allow-Origin: *' is configured on the stream host."
+                );
+                hls.destroy();
+                break;
+              }
+
+              if (networkRetryCountRef.current < 3) {
+                networkRetryCountRef.current += 1;
+                console.log(`[HLS.js] Retrying recoverable network error (${networkRetryCountRef.current}/3)...`);
+                setTimeout(() => {
+                  if (hlsRef.current === hls) {
+                    hls.startLoad();
+                  }
+                }, 1000);
+              } else {
+                console.error(`[HLS.js] Network error retry limit reached for: ${safeUrl}`);
+                setPlaybackError(
+                  "Network error: Failed to download HLS video segments or manifest. Please verify your stream URL and network connection."
+                );
+                hls.destroy();
+              }
+              break;
+            }
+
+            case Hls.ErrorTypes.MEDIA_ERROR: {
+              if (mediaRetryCountRef.current < 2) {
+                mediaRetryCountRef.current += 1;
+                console.log(`[HLS.js] Recovering media error (${mediaRetryCountRef.current}/2)...`);
+                hls.recoverMediaError();
+              } else if (mediaRetryCountRef.current === 2) {
+                mediaRetryCountRef.current += 1;
+                console.log(`[HLS.js] Swapping audio codec and recovering media error...`);
+                hls.swapAudioCodec();
+                hls.recoverMediaError();
+              } else {
+                console.error(`[HLS.js] Media recovery failed for: ${safeUrl}`);
+                setPlaybackError(
+                  "Media decode error: The video or audio codec in this HLS stream could not be decoded by your device."
+                );
+                hls.destroy();
+              }
+              break;
+            }
+
+            default:
+              console.error(`[HLS.js] Unrecoverable stream error (${data.details}) for: ${safeUrl}`);
+              setPlaybackError(`HLS stream playback failed: ${data.details || "Stream format error"}.`);
+              hls.destroy();
+              break;
+          }
+        }
+      });
+
+      hls.loadSource(effectiveMediaSrc);
+      hls.attachMedia(video);
+    } else if (isNativeHlsSupported(video)) {
+      console.log(`[HLS] Browser supports native HLS playback (Safari): ${safeUrl}`);
+      video.src = effectiveMediaSrc;
+    } else {
+      console.error(`[HLS] HLS playback is not supported on this browser: ${safeUrl}`);
+      setPlaybackError("HLS (.m3u8) video streaming is not supported on this browser.");
+    }
+
+    return () => {
+      if (hlsRef.current) {
+        console.log(`[HLS.js] Teardown HLS instance for: ${safeUrl}`);
+        try {
+          hlsRef.current.detachMedia();
+          hlsRef.current.destroy();
+        } catch {}
+        hlsRef.current = null;
+      }
+    };
+  }, [effectiveMediaSrc]);
+
+  // Video listeners: mounted with [effectiveMediaSrc] to prevent teardown/re-attach on unrelated renders (e.g. chat)
   useEffect(() => {
     const video = videoRef.current;
     if (!video) return;
@@ -808,13 +1093,18 @@ function VideoPlayerComponent({
     };
 
     const onError = () => {
+      // If HLS.js is actively managing the video element, error handling and recoveries are handled via HLS events
+      if (isHlsUrl(effectiveMediaSrc) && isHlsJsSupported() && hlsRef.current) {
+        setIsBuffering(false);
+        return;
+      }
       setIsBuffering(false);
       const err = video.error;
       let msg = "Playback failed: Unable to load or play video stream.";
       if (
         err?.code === MediaError.MEDIA_ERR_SRC_NOT_SUPPORTED ||
         err?.code === MediaError.MEDIA_ERR_DECODE ||
-        src.startsWith("blob:")
+        effectiveMediaSrc.startsWith("blob:")
       ) {
         msg = "Your device's media decoder could not decode this video codec or track. Please select a video encoded with a supported codec.";
       } else if (err?.code === MediaError.MEDIA_ERR_NETWORK) {
@@ -864,7 +1154,7 @@ function VideoPlayerComponent({
       video.removeEventListener("error", onError);
       video.removeEventListener("ended", onEnded);
     };
-  }, [src]);
+  }, [effectiveMediaSrc]);
 
   // Screen Orientation helpers for mobile fullscreen
   const lockLandscapeOrientation = async () => {
@@ -1190,18 +1480,27 @@ function VideoPlayerComponent({
   };
 
   const handleAudioTrackSelect = (trackIndex: number) => {
-    const video = videoRef.current as any;
-    if (video && video.audioTracks && video.audioTracks.length > trackIndex) {
-      for (let i = 0; i < video.audioTracks.length; i++) {
-        video.audioTracks[i].enabled = i === trackIndex;
-      }
+    if (hlsRef.current && availableAudioTracks.length > 0) {
+      hlsRef.current.audioTrack = trackIndex;
       setCurrentAudioTrack(trackIndex);
       if (onAudioTrackChange && canControl) {
         triggerSyncIndicator();
         onAudioTrackChange(trackIndex);
       }
     } else {
-      setCurrentAudioTrack(trackIndex);
+      const video = videoRef.current as any;
+      if (video && video.audioTracks && video.audioTracks.length > trackIndex) {
+        for (let i = 0; i < video.audioTracks.length; i++) {
+          video.audioTracks[i].enabled = i === trackIndex;
+        }
+        setCurrentAudioTrack(trackIndex);
+        if (onAudioTrackChange && canControl) {
+          triggerSyncIndicator();
+          onAudioTrackChange(trackIndex);
+        }
+      } else {
+        setCurrentAudioTrack(trackIndex);
+      }
     }
     setShowAudioMenu(false);
     resetControlsTimeout();
@@ -1303,7 +1602,7 @@ function VideoPlayerComponent({
       {/* HTML5 Video Element */}
       <video
         ref={videoRef}
-        src={src}
+        src={isHlsUrl(effectiveMediaSrc) && isHlsJsSupported() ? undefined : effectiveMediaSrc}
         poster={poster}
         playsInline
         preload="metadata"
@@ -1336,7 +1635,13 @@ function VideoPlayerComponent({
           <button
             onClick={() => {
               setPlaybackError(null);
-              videoRef.current?.load();
+              networkRetryCountRef.current = 0;
+              mediaRetryCountRef.current = 0;
+              if (isHlsUrl(effectiveMediaSrc) && isHlsJsSupported() && hlsRef.current) {
+                hlsRef.current.startLoad();
+              } else {
+                videoRef.current?.load();
+              }
             }}
             className="px-4 py-2 bg-rose-600 hover:bg-rose-500 text-white rounded-xl text-xs font-semibold transition"
           >
@@ -1660,6 +1965,8 @@ function VideoPlayerComponent({
                   onClick={(e) => {
                     e.stopPropagation();
                     setShowAudioMenu(!showAudioMenu);
+                    setShowQualityMenu(false);
+                    setShowDisplayMenu(false);
                     resetControlsTimeout();
                   }}
                   className={`p-1.5 rounded-lg transition flex items-center gap-1 text-xs ${
@@ -1698,6 +2005,70 @@ function VideoPlayerComponent({
               </div>
             )}
 
+            {/* HLS Video Quality Selector (Hidden for MP4 / offline videos) */}
+            {availableQualities.length > 1 && (
+              <div className="relative">
+                <button
+                  onClick={(e) => {
+                    e.stopPropagation();
+                    setShowQualityMenu(!showQualityMenu);
+                    setShowAudioMenu(false);
+                    setShowDisplayMenu(false);
+                    resetControlsTimeout();
+                  }}
+                  className={`p-1.5 rounded-lg transition flex items-center gap-1 text-xs ${
+                    showQualityMenu ? "bg-rose-600 text-white" : "hover:bg-white/15 text-neutral-300 hover:text-white"
+                  }`}
+                  title={`Video Quality (${
+                    selectedQuality === -1
+                      ? currentQualityHeight
+                        ? `Auto: ${currentQualityHeight}p`
+                        : "Auto"
+                      : availableQualities.find((q) => q.id === selectedQuality)?.label || "Auto"
+                  })`}
+                >
+                  <Settings className="w-4 h-4" />
+                  <span className="hidden sm:inline text-[10px] font-semibold">
+                    {selectedQuality === -1
+                      ? currentQualityHeight
+                        ? `${currentQualityHeight}p`
+                        : "Auto"
+                      : availableQualities.find((q) => q.id === selectedQuality)?.label || "Auto"}
+                  </span>
+                </button>
+
+                {showQualityMenu && (
+                  <div
+                    onClick={(e) => {
+                      e.stopPropagation();
+                      resetControlsTimeout();
+                    }}
+                    className="absolute right-0 bottom-full mb-2 bg-neutral-900 border border-neutral-750 rounded-xl p-1.5 shadow-xl w-36 z-30 flex flex-col gap-0.5 animate-in fade-in slide-in-from-bottom-2 duration-150"
+                  >
+                    <p className="text-[10px] font-semibold uppercase tracking-wider text-neutral-400 px-2 py-1">
+                      Quality
+                    </p>
+                    {availableQualities.map((q) => (
+                      <button
+                        key={q.id}
+                        onClick={() => handleQualitySelect(q.id)}
+                        className={`w-full text-left px-2.5 py-1.5 rounded-lg text-xs flex items-center justify-between transition ${
+                          selectedQuality === q.id ? "bg-rose-600 text-white" : "text-neutral-300 hover:bg-neutral-800"
+                        }`}
+                      >
+                        <span className="truncate">
+                          {q.id === -1 && currentQualityHeight
+                            ? `Auto (${currentQualityHeight}p)`
+                            : q.label}
+                        </span>
+                        {selectedQuality === q.id && <Check className="w-3.5 h-3.5 shrink-0" />}
+                      </button>
+                    ))}
+                  </div>
+                )}
+              </div>
+            )}
+
             {/* Subtitle / CC Control */}
             {hasCurrentSubtitle && (
               <button
@@ -1722,6 +2093,7 @@ function VideoPlayerComponent({
                   e.stopPropagation();
                   setShowDisplayMenu(!showDisplayMenu);
                   setShowAudioMenu(false);
+                  setShowQualityMenu(false);
                   resetControlsTimeout();
                 }}
                 className={`p-1.5 rounded-lg transition flex items-center justify-center text-xs ${

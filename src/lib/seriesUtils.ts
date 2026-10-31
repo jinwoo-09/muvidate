@@ -57,6 +57,7 @@ export function parseEpisodeUrls(rawUrls: string): string[] {
         remaining.includes(".mp4") ||
         remaining.includes(".mkv") ||
         remaining.includes(".webm") ||
+        remaining.includes(".m3u8") ||
         /^[a-zA-Z0-9_\-./]+/.test(remaining);
 
       if (!inQuery || isNextUrl) {

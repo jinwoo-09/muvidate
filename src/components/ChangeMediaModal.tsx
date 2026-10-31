@@ -499,18 +499,18 @@ export function ChangeMediaModal({
 
               <div>
                 <label className="block text-[11px] font-semibold uppercase tracking-wider text-neutral-400 mb-1">
-                  Direct MP4 Video URL *
+                  Direct Video or HLS URL (MP4 / M3U8) *
                 </label>
                 <input
                   type="url"
                   required
                   value={directUrl}
                   onChange={(e) => setDirectUrl(e.target.value)}
-                  placeholder="https://example.com/movie.mp4"
+                  placeholder="https://example.com/movie.mp4 or stream.m3u8"
                   className="w-full px-3 py-2 bg-neutral-950 border border-neutral-700 rounded-xl text-white placeholder-neutral-500 focus:outline-none focus:ring-2 focus:ring-rose-500 text-xs"
                 />
                 <p className="text-[10px] text-neutral-500 mt-1">
-                  Provide an HTTP or HTTPS link to a direct MP4 video stream.
+                  Provide an HTTP or HTTPS link to a direct MP4 video or HLS (.m3u8) adaptive stream.
                 </p>
               </div>
             </div>

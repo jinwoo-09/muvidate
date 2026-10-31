@@ -444,18 +444,18 @@ export function CreateRoomModal({
               </div>
               <div>
                 <label className="block text-xs font-semibold uppercase tracking-wider text-neutral-300 mb-1">
-                  Direct Video URL (MP4 / WebM) *
+                  Direct Video or HLS URL (MP4 / M3U8 / WebM) *
                 </label>
                 <input
                   type="url"
                   required
                   value={directUrl}
                   onChange={(e) => setDirectUrl(e.target.value)}
-                  placeholder="https://example.com/video.mp4"
+                  placeholder="https://example.com/video.mp4 or stream.m3u8"
                   className="w-full px-3.5 py-2.5 bg-neutral-950 border border-neutral-700 rounded-xl text-white placeholder-neutral-500 focus:outline-none focus:ring-2 focus:ring-rose-500 text-sm"
                 />
                 <p className="text-xs text-neutral-500 mt-1">
-                  Ensure the direct video link is publicly accessible via HTTPS.
+                  Supports direct MP4 and HLS (.m3u8) adaptive streams. Ensure the link is publicly accessible via HTTPS.
                 </p>
               </div>
             </div>

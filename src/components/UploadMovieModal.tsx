@@ -616,7 +616,7 @@ export function UploadMovieModal({
                           setMovieUrlInput(e.target.value);
                           setError(null);
                         }}
-                        placeholder="Single Movie: https://example.com/movie.mp4&#10;Series: ep1.mp4, ep2.mp4, ep3.mp4"
+                        placeholder="Single Movie: https://example.com/movie.mp4 or stream.m3u8&#10;Series: ep1.mp4, ep2.mp4 or ep1.m3u8, ep2.m3u8"
                         disabled={isUploading}
                         className="w-full pl-3.5 pr-10 py-2 bg-neutral-900 border border-neutral-700 rounded-xl text-white placeholder-neutral-500 focus:outline-none focus:ring-2 focus:ring-rose-500 text-sm resize-none"
                       />
@@ -637,10 +637,10 @@ export function UploadMovieModal({
 
                 <div className="text-[11px] text-neutral-400 space-y-1 bg-neutral-950/60 p-3 rounded-xl border border-neutral-800">
                   <p>
-                    <strong className="text-neutral-300">Single Movie:</strong> Enter a single video URL.
+                    <strong className="text-neutral-300">Single Movie:</strong> Enter a single video URL (.mp4, .m3u8, or .webm).
                   </p>
                   <p>
-                    <strong className="text-neutral-300">TV Series:</strong> Separate episode URLs with commas (e.g. <code className="text-rose-300">ep1.mp4, ep2.mp4, ep3.mp4</code>).
+                    <strong className="text-neutral-300">TV Series:</strong> Separate episode URLs with commas (e.g. <code className="text-rose-300">ep1.mp4, ep2.mp4</code> or <code className="text-rose-300">ep1.m3u8, ep2.m3u8</code>).
                   </p>
                   <p>
                     <strong className="text-neutral-300">Season Number:</strong> If left empty or set to 1, URLs save to Season 1 (<code className="text-neutral-300">url</code>). Season 2 saves to <code className="text-neutral-300">url2</code>, Season 3 to <code className="text-neutral-300">url3</code>, etc.
