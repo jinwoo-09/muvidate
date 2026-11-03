@@ -889,10 +889,10 @@ export function WatchRoom({ roomCode, initialOfflineFile, onLeaveRoom }: WatchRo
       {/* Main Watch Room Grid: Video Player (Left) + Chat / Participants (Right) */}
       <div className="grid grid-cols-1 lg:grid-cols-12 gap-4 items-start">
         {/* Video Player Column */}
-        <div className="contents lg:block lg:col-span-8 lg:space-y-4">
+        <div className="w-full lg:col-span-8 space-y-3 sm:space-y-4">
           {/* Sticky Video Player Container - Pinned at top-0 with z-9999 only once scrolled to top */}
           <div
-            className={`sticky top-0 z-[9999] ${isOfflineSource ? "bg-transparent" : "bg-neutral-950/95"} py-2 -mx-1 px-1 rounded-2xl watch-room-sticky-player`}
+            className={`sticky top-0 z-[9999] ${isOfflineSource ? "bg-transparent" : "bg-neutral-950/95"} py-1.5 sm:py-2 -mx-1 px-1 rounded-2xl watch-room-sticky-player`}
             style={{
               zIndex: 9999,
               top: 0
@@ -973,7 +973,7 @@ export function WatchRoom({ roomCode, initialOfflineFile, onLeaveRoom }: WatchRo
         </div>
 
         {/* Chat & Participants Column */}
-        <div className="lg:col-span-4 flex flex-col h-[520px] lg:h-[550px] lg:max-h-[70vh] min-h-[480px]">
+        <div className="w-full lg:col-span-4 flex flex-col h-[460px] sm:h-[520px] lg:h-[550px] lg:max-h-[70vh] min-h-[360px] sm:min-h-[480px]">
           {/* Tabs for Mobile/Desktop */}
           <div className="flex items-center gap-1 p-1 bg-neutral-950 rounded-xl border border-neutral-800 mb-2">
             <button

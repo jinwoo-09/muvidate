@@ -2,6 +2,7 @@ import express from 'express';
 import { createServer as createViteServer } from 'vite';
 import uploadHandler from './api/upload';
 import cleanupVoiceNotesHandler from './api/cleanup-voice-notes';
+import diagnoseMediaHandler from './api/diagnose-media';
 
 async function startServer() {
   const app = express();
@@ -18,6 +19,11 @@ async function startServer() {
   // Route /api/cleanup-voice-notes to the serverless expiration cleanup handler
   app.all('/api/cleanup-voice-notes', (req, res) => {
     return cleanupVoiceNotesHandler(req, res);
+  });
+
+  // Route /api/diagnose-media to inspect media servers, byte-ranges, and Apple codec tags
+  app.all('/api/diagnose-media', (req, res) => {
+    return diagnoseMediaHandler(req, res);
   });
 
   // Health check endpoint

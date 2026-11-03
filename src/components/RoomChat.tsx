@@ -28,7 +28,9 @@ export function RoomChat({
   const [messages, setMessages] = useState<ChatMessage[]>([]);
   const [inputText, setInputText] = useState("");
   const [isSending, setIsSending] = useState(false);
-  const messagesEndRef = useRef<HTMLDivElement>(null);
+  const messagesContainerRef = useRef<HTMLDivElement>(null);
+  const chatInputRef = useRef<HTMLInputElement>(null);
+  const [keyboardOffset, setKeyboardOffset] = useState(0);
   const [selectedAvatar, setSelectedAvatar] = useState<{ username: string; photoURL: string; initials: string } | null>(null);
   const [, setAvatarCacheVersion] = useState(0);
 
@@ -104,12 +106,58 @@ export function RoomChat({
     });
   }, [messages]);
 
+  // Scroll only the message container internally to bottom, never scrolling the entire page or moving video player
   useEffect(() => {
-    messagesEndRef.current?.scrollIntoView({ behavior: "smooth" });
+    if (messagesContainerRef.current) {
+      messagesContainerRef.current.scrollTop = messagesContainerRef.current.scrollHeight;
+    }
   }, [messages]);
+
+  // Visual viewport tracking for mobile virtual keyboards (iOS Safari and Android Chrome)
+  useEffect(() => {
+    if (typeof window === "undefined" || !window.visualViewport) return;
+
+    const handleVisualViewport = () => {
+      const vv = window.visualViewport;
+      if (!vv) return;
+
+      const layoutHeight = window.innerHeight;
+      const visualHeight = vv.height;
+      const offset = Math.max(0, layoutHeight - (visualHeight + (vv.offsetTop || 0)));
+
+      // If the keyboard is open (offset > 40px), track offset so input sits above it
+      setKeyboardOffset(offset > 40 ? offset : 0);
+
+      if (document.activeElement === chatInputRef.current) {
+        requestAnimationFrame(() => {
+          if (messagesContainerRef.current) {
+            messagesContainerRef.current.scrollTop = messagesContainerRef.current.scrollHeight;
+          }
+        });
+      }
+    };
+
+    const vv = window.visualViewport;
+    vv.addEventListener("resize", handleVisualViewport);
+    vv.addEventListener("scroll", handleVisualViewport);
+
+    return () => {
+      vv.removeEventListener("resize", handleVisualViewport);
+      vv.removeEventListener("scroll", handleVisualViewport);
+    };
+  }, []);
+
+  const handleInputFocus = () => {
+    setTimeout(() => {
+      if (messagesContainerRef.current) {
+        messagesContainerRef.current.scrollTop = messagesContainerRef.current.scrollHeight;
+      }
+    }, 200);
+  };
 
   const handleSendMessage = async (e: React.FormEvent) => {
     e.preventDefault();
+    e.stopPropagation();
     const text = inputText.trim();
     if (!text || !user || !profile || isSending || isMovieCompleted) return;
 
@@ -190,7 +238,11 @@ export function RoomChat({
       </div>
 
       {/* Messages List */}
-      <div className="flex-1 overflow-y-auto p-3 sm:p-4 space-y-3.5 min-h-[220px]">
+      <div 
+        ref={messagesContainerRef}
+        className="flex-1 overflow-y-auto p-3 sm:p-4 space-y-3.5 min-h-[160px] overscroll-contain"
+        style={{ WebkitOverflowScrolling: "touch" }}
+      >
         {isMovieCompleted ? (
           <div className="flex flex-col items-center justify-center h-full text-center p-6 text-neutral-500">
             <p className="text-sm font-semibold text-neutral-300">Session Ended</p>
@@ -297,17 +349,27 @@ export function RoomChat({
             );
           })
         )}
-        <div ref={messagesEndRef} />
       </div>
 
       {/* Message Input & Voice Note */}
-      <div className="p-2.5 sm:p-3 border-t border-neutral-800 bg-neutral-950/80">
+      <div 
+        className="p-2.5 sm:p-3 border-t border-neutral-800 bg-neutral-950/95 transition-all duration-150"
+        style={{
+          paddingBottom: keyboardOffset > 0 
+            ? `${keyboardOffset + 8}px` 
+            : "max(0.625rem, env(safe-area-inset-bottom, 0px))"
+        }}
+      >
         {isMovieCompleted ? (
           <p className="text-center text-xs text-neutral-500 py-1">
             Chat is disabled (movie session ended).
           </p>
         ) : (
-          <form onSubmit={handleSendMessage} className="flex items-center gap-2">
+          <form 
+            onSubmit={handleSendMessage} 
+            action="#" 
+            className="flex items-center gap-2"
+          >
             <VoiceNoteRecorder
               onVoiceNoteUploaded={handleVoiceNoteUploaded}
               onRecordingStateChange={onRecordingStateChange}
@@ -315,12 +377,14 @@ export function RoomChat({
             />
 
             <input
+              ref={chatInputRef}
               type="text"
               value={inputText}
               onChange={(e) => setInputText(e.target.value)}
+              onFocus={handleInputFocus}
               placeholder="Type a message..."
               disabled={isMovieCompleted}
-              className="flex-1 px-3 py-2 bg-neutral-900 border border-neutral-750 rounded-xl text-xs text-white placeholder-neutral-500 focus:outline-none focus:ring-1 focus:ring-rose-500 transition"
+              className="flex-1 px-3 py-2 bg-neutral-900 border border-neutral-750 rounded-xl text-base sm:text-xs text-white placeholder-neutral-500 focus:outline-none focus:ring-1 focus:ring-rose-500 transition"
             />
 
             <button

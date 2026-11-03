@@ -34,6 +34,19 @@ import {
   HlsQualityOption 
 } from "../lib/hlsUtils";
 
+/**
+ * Detects Apple WebKit browsers including iOS Safari, Chrome on iOS (CriOS),
+ * Firefox on iOS (FxiOS), and iPadOS Safari.
+ */
+export function isAppleWebKitDevice(): boolean {
+  if (typeof navigator === "undefined") return false;
+  const ua = navigator.userAgent || "";
+  const platform = (navigator as any).userAgentData?.platform || navigator.platform || "";
+  const isIOS = /iPad|iPhone|iPod/.test(ua) || (platform === "MacIntel" && navigator.maxTouchPoints > 1);
+  const isWebKit = /WebKit/i.test(ua) && !/Chrome|Android/i.test(ua);
+  return isIOS || isWebKit;
+}
+
 export interface VideoPlayerProps {
   src: string;
   poster?: string;
@@ -234,6 +247,80 @@ function VideoPlayerComponent({
     isRecoveringFromBufferRef.current = false;
     hasInitialSyncAppliedRef.current = false;
   }, [roomCode, effectiveMediaSrc]);
+
+  // Apple iOS / Safari MP4 Codec & Black Screen Diagnostic states
+  const [codecDiagnostic, setCodecDiagnostic] = useState<{
+    isHev1: boolean;
+    title: string;
+    summary: string;
+    audioPlaying: boolean;
+    details?: string;
+    recommendation: string;
+  } | null>(null);
+  const [isDiagnosticDismissed, setIsDiagnosticDismissed] = useState(false);
+  const hasProbedCodecRef = useRef(false);
+
+  // Reset codec diagnosis state on media switch
+  useEffect(() => {
+    hasProbedCodecRef.current = false;
+    setCodecDiagnostic(null);
+    setIsDiagnosticDismissed(false);
+  }, [effectiveMediaSrc]);
+
+  // Ensure native video element has playsinline and webkit-playsinline DOM attributes
+  useEffect(() => {
+    const video = videoRef.current;
+    if (!video) return;
+    video.setAttribute("playsinline", "true");
+    video.setAttribute("webkit-playsinline", "true");
+    video.setAttribute("x5-playsinline", "true");
+  }, []);
+
+  const runCodecDiagnosis = useCallback(async (isAudioCurrentlyPlaying: boolean) => {
+    if (hasProbedCodecRef.current) return;
+    hasProbedCodecRef.current = true;
+
+    try {
+      const res = await fetch(`/api/diagnose-media?url=${encodeURIComponent(effectiveMediaSrc)}`);
+      if (!res.ok) throw new Error("Diagnosis endpoint error");
+      const data = await res.json();
+
+      if (data.detectedCodecTag === "hev1" || !data.appleCompatibility?.isCompatible) {
+        setCodecDiagnostic({
+          isHev1: data.detectedCodecTag === "hev1",
+          title: isAudioCurrentlyPlaying
+            ? "Apple iOS Black Screen (HEVC 'hev1' Incompatibility)"
+            : "Apple iOS Codec Incompatibility (HEVC 'hev1')",
+          summary:
+            data.appleCompatibility?.reason ||
+            "This MP4 video is encoded in HEVC (H.265) with the 'hev1' tag. Apple AVFoundation strictly requires the 'hvc1' tag or H.264 (AVC) to decode video frames.",
+          audioPlaying: isAudioCurrentlyPlaying,
+          details:
+            "Android Chrome, desktop Chrome, and VLC can decode both 'hev1' and 'hvc1'. However, Apple devices lack hardware decoding for 'hev1' MP4 files.",
+          recommendation:
+            data.appleCompatibility?.recommendation ||
+            "Please use an H.264 (avc1) encoded MP4 or an HLS (.m3u8) stream for universal playback on iPhone and iPad."
+        });
+      }
+    } catch {
+      // Local fallback diagnosis if server probe is unreachable
+      if (isAppleWebKitDevice() && !isHlsUrl(effectiveMediaSrc) && effectiveMediaSrc.includes(".mp4")) {
+        setCodecDiagnostic({
+          isHev1: true,
+          title: isAudioCurrentlyPlaying
+            ? "Apple iOS Black Screen (HEVC 'hev1' Incompatibility)"
+            : "Apple iOS Codec Incompatibility",
+          summary:
+            "This MP4 video is encoded in HEVC (H.265) with the 'hev1' tag. Apple AVFoundation strictly requires the 'hvc1' tag or H.264 (AVC) to decode video frames.",
+          audioPlaying: isAudioCurrentlyPlaying,
+          details:
+            "Android Chrome, desktop Chrome, and VLC can decode both 'hev1' and 'hvc1'. However, Apple devices lack hardware decoding for 'hev1' MP4 files.",
+          recommendation:
+            "Please use an H.264 (avc1) encoded MP4 or an HLS (.m3u8) stream for universal playback on iPhone and iPad."
+        });
+      }
+    }
+  }, [effectiveMediaSrc]);
 
   // Close menus when clicking outside
   useEffect(() => {
@@ -926,6 +1013,26 @@ function VideoPlayerComponent({
       }
       // If time is advancing, video is playing smoothly and not buffering
       setIsBuffering(false);
+
+      // Black screen detection on Apple devices:
+      // If audio is playing for more than 1.5 seconds, but zero video frames were rendered
+      // or video dimensions failed to initialize on an MP4 file
+      if (
+        isAppleWebKitDevice() &&
+        !isHlsUrl(effectiveMediaSrc) &&
+        !hasProbedCodecRef.current &&
+        video.currentTime > 1.5 &&
+        !video.paused
+      ) {
+        const decodedFrames = (video as any).webkitDecodedFrameCount;
+        const zeroFrames = decodedFrames !== undefined && decodedFrames === 0;
+        const zeroDims = video.videoWidth === 0 && video.videoHeight === 0;
+
+        if (zeroFrames || zeroDims) {
+          console.warn("[Apple WebKit] Zero video frames rendered during active playback. Running codec diagnosis...");
+          runCodecDiagnosis(true);
+        }
+      }
     };
 
     const onLoadedMetadata = () => {
@@ -1100,13 +1207,25 @@ function VideoPlayerComponent({
       }
       setIsBuffering(false);
       const err = video.error;
+
+      // If playing on Apple device and encountering a decode or unsupported source error on MP4
+      if (
+        isAppleWebKitDevice() &&
+        !isHlsUrl(effectiveMediaSrc) &&
+        (effectiveMediaSrc.includes(".mp4") ||
+          err?.code === MediaError.MEDIA_ERR_DECODE ||
+          err?.code === MediaError.MEDIA_ERR_SRC_NOT_SUPPORTED)
+      ) {
+        runCodecDiagnosis(false);
+      }
+
       let msg = "Playback failed: Unable to load or play video stream.";
       if (
         err?.code === MediaError.MEDIA_ERR_SRC_NOT_SUPPORTED ||
         err?.code === MediaError.MEDIA_ERR_DECODE ||
         effectiveMediaSrc.startsWith("blob:")
       ) {
-        msg = "Your device's media decoder could not decode this video codec or track. Please select a video encoded with a supported codec.";
+        msg = "Your device's media decoder could not decode this video codec or track. Please select a video encoded with a supported codec (such as H.264/AVC or HLS .m3u8).";
       } else if (err?.code === MediaError.MEDIA_ERR_NETWORK) {
         msg = "A network error caused the video download to fail.";
       }
@@ -1605,6 +1724,9 @@ function VideoPlayerComponent({
         src={isHlsUrl(effectiveMediaSrc) && isHlsJsSupported() ? undefined : effectiveMediaSrc}
         poster={poster}
         playsInline
+        // @ts-ignore
+        webkit-playsinline="true"
+        x5-playsinline="true"
         preload="metadata"
         className={`w-full h-full cursor-pointer ${
           displayMode === "fit"
@@ -1627,7 +1749,7 @@ function VideoPlayerComponent({
       )}
 
       {/* Playback Error Overlay */}
-      {playbackError && (
+      {playbackError && !codecDiagnostic && (
         <div className="absolute inset-0 z-30 flex flex-col items-center justify-center bg-neutral-950/90 p-6 text-center">
           <AlertCircle className="w-12 h-12 text-rose-500 mb-3" />
           <h4 className="text-lg font-bold text-white mb-1">Playback Error</h4>
@@ -1647,6 +1769,68 @@ function VideoPlayerComponent({
           >
             Retry Video
           </button>
+        </div>
+      )}
+
+      {/* Apple iOS / Safari Codec Diagnostic Overlay (Black Screen / HEVC hev1 Notice) */}
+      {codecDiagnostic && !isDiagnosticDismissed && (
+        <div className="absolute inset-0 z-35 flex flex-col items-center justify-center bg-black/90 backdrop-blur-md p-4 sm:p-6 text-center animate-in fade-in duration-200">
+          <div className="max-w-md w-full bg-neutral-900 border border-neutral-750 rounded-2xl p-5 shadow-2xl text-left">
+            <div className="flex items-start gap-3 mb-3">
+              <div className="p-2.5 bg-rose-500/15 text-rose-400 rounded-xl shrink-0 mt-0.5">
+                <AlertCircle className="w-5 h-5" />
+              </div>
+              <div className="min-w-0 flex-1">
+                <h4 className="text-sm font-bold text-white leading-snug">{codecDiagnostic.title}</h4>
+                <div className="flex items-center gap-2 mt-1.5 flex-wrap">
+                  <span className="text-[10px] font-mono bg-neutral-800 text-neutral-300 px-2 py-0.5 rounded border border-neutral-700">
+                    Tag: {codecDiagnostic.isHev1 ? "hev1 (HEVC)" : "MP4"}
+                  </span>
+                  {codecDiagnostic.audioPlaying && (
+                    <span className="text-[10px] font-semibold bg-emerald-500/20 text-emerald-400 border border-emerald-500/30 px-2 py-0.5 rounded flex items-center gap-1">
+                      <span className="w-1.5 h-1.5 rounded-full bg-emerald-400 animate-pulse" />
+                      Audio Playing
+                    </span>
+                  )}
+                </div>
+              </div>
+            </div>
+
+            <p className="text-xs text-neutral-300 leading-relaxed mb-3">
+              {codecDiagnostic.summary}
+            </p>
+
+            <div className="p-3 bg-neutral-950/90 rounded-xl border border-neutral-800 text-[11px] text-neutral-400 mb-4 space-y-1.5">
+              <p>
+                <strong className="text-neutral-200">Why does this happen?</strong> Apple AVFoundation hardware video decoding on iOS Safari and WebKit requires HEVC streams to carry the <code className="text-rose-400 font-mono">hvc1</code> tag. Android Chrome and desktop VLC accept both <code className="text-neutral-300 font-mono">hev1</code> and <code className="text-neutral-300 font-mono">hvc1</code>.
+              </p>
+              <p>
+                <strong className="text-neutral-200">Recommendation:</strong> {codecDiagnostic.recommendation}
+              </p>
+            </div>
+
+            <div className="flex items-center gap-2 flex-wrap">
+              {codecDiagnostic.audioPlaying && (
+                <button
+                  type="button"
+                  onClick={() => setIsDiagnosticDismissed(true)}
+                  className="flex-1 min-w-[130px] px-3 py-2 bg-neutral-800 hover:bg-neutral-700 text-white text-xs font-semibold rounded-xl transition text-center"
+                >
+                  Listen to Audio Only
+                </button>
+              )}
+              <button
+                type="button"
+                onClick={() => {
+                  setCodecDiagnostic(null);
+                  videoRef.current?.load();
+                }}
+                className="px-4 py-2 bg-rose-600 hover:bg-rose-500 text-white text-xs font-semibold rounded-xl transition shadow text-center"
+              >
+                Retry Video
+              </button>
+            </div>
+          </div>
         </div>
       )}
 
