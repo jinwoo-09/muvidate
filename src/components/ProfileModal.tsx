@@ -1,6 +1,6 @@
 import React, { useState, useRef } from "react";
 import { useAuth } from "../context/AuthContext";
-import { uploadProfilePictureToAnonDrop } from "../lib/anondropUpload";
+import { uploadFileToWorker } from "../lib/workerApi";
 import { X, Camera, Loader2, AlertCircle, CheckCircle, Copy, User, Instagram, KeyRound, Eye, EyeOff, LogOut } from "lucide-react";
 
 interface ProfileModalProps {
@@ -45,7 +45,7 @@ export function ProfileModal({ isOpen, onClose }: ProfileModalProps) {
     setUploading(true);
 
     try {
-      const photoUrl = await uploadProfilePictureToAnonDrop(file);
+      const photoUrl = await uploadFileToWorker(file, file.name);
       await updatePhoto(photoUrl);
       setSuccess("Profile picture updated successfully!");
     } catch (err: any) {

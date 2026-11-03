@@ -1,6 +1,6 @@
 import React, { useState, useRef, useEffect } from "react";
 import { Mic, Square, Trash2, Send, Loader2, AlertCircle } from "lucide-react";
-import { uploadVoiceNoteToAnonDrop } from "../lib/anondropUpload";
+import { uploadVoiceNoteToBlob } from "../lib/blobVoiceUpload";
 
 interface VoiceNoteRecorderProps {
   onVoiceNoteUploaded: (audioUrl: string) => Promise<void>;
@@ -163,9 +163,9 @@ export function VoiceNoteRecorder({
         return;
       }
 
-      // Upload via AnonDrop API
+      // Upload via Vercel Blob client-upload API
       setUploadProgress(0);
-      const directAudioUrl = await uploadVoiceNoteToAnonDrop(audioBlob, (pct) => {
+      const directAudioUrl = await uploadVoiceNoteToBlob(audioBlob, (pct) => {
         setUploadProgress(pct);
       });
 
