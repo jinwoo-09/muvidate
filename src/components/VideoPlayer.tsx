@@ -1677,48 +1677,66 @@ function VideoPlayerComponent({
   const progressPercent = duration > 0 ? (currentTime / duration) * 100 : 0;
   const bufferedPercent = duration > 0 ? (bufferedEnd / duration) * 100 : 0;
 
-  const handleVideoClick = (e: React.MouseEvent) => {
-    e.stopPropagation();
-    if (canControl) {
-      togglePlayPause();
-      resetControlsTimeout();
+  // Track timestamp when controls were revealed from a hidden state.
+  // Any button click within 450ms of a reveal tap is safely ignored to prevent
+  // the first reveal tap from accidentally triggering newly revealed controls on touchscreen devices.
+  const controlsRevealedAtRef = useRef<number>(0);
+
+  const isRevealTapRecently = useCallback(() => {
+    return Date.now() - controlsRevealedAtRef.current < 450;
+  }, []);
+
+  const revealControls = useCallback(() => {
+    controlsRevealedAtRef.current = Date.now();
+    setShowControls(true);
+    resetControlsTimeout();
+  }, [resetControlsTimeout]);
+
+  // Handle tap / click anywhere on the player background or video element.
+  // CRITICAL REQUIREMENT: This handler NEVER toggles playback!
+  // Playback toggles ONLY through dedicated Play/Pause buttons.
+  const handleBackgroundClick = useCallback((e: React.MouseEvent | React.PointerEvent) => {
+    const target = e.target as HTMLElement | null;
+    if (target && target.closest("button, input, select, a, [role='button'], [data-control='true']")) {
+      return;
+    }
+
+    if (isRevealTapRecently()) {
+      return;
+    }
+
+    if (!showControls) {
+      revealControls();
     } else {
-      // For locked non-admin users, tapping the video toggles/shows controls and resets the 2s timer
-      if (!showControls) {
-        setShowControls(true);
-        resetControlsTimeout();
-      } else {
-        setShowControls(false);
-        if (controlsTimeoutRef.current) {
-          clearTimeout(controlsTimeoutRef.current);
-          controlsTimeoutRef.current = null;
-        }
+      // If controls are currently visible, tapping the empty background hides them
+      setShowControls(false);
+      setShowAudioMenu(false);
+      setShowDisplayMenu(false);
+      setShowQualityMenu(false);
+      setIsSeasonMenuOpen(false);
+      setIsEpisodeMenuOpen(false);
+      if (controlsTimeoutRef.current) {
+        clearTimeout(controlsTimeoutRef.current);
+        controlsTimeoutRef.current = null;
       }
     }
-  };
+  }, [showControls, isRevealTapRecently, revealControls]);
 
   return (
     <div
       ref={containerRef}
-      onMouseMove={resetControlsTimeout}
-      onTouchStart={resetControlsTimeout}
-      onClick={() => {
-        if (!showControls) {
-          setShowControls(true);
-          resetControlsTimeout();
-        } else if (!canControl) {
-          setShowControls(false);
-          if (controlsTimeoutRef.current) {
-            clearTimeout(controlsTimeoutRef.current);
-            controlsTimeoutRef.current = null;
-          }
-        } else {
+      onPointerMove={(e) => {
+        if (e.pointerType === "mouse") {
           resetControlsTimeout();
         }
       }}
+      onMouseMove={() => {
+        resetControlsTimeout();
+      }}
+      onClick={handleBackgroundClick}
       className="relative w-full aspect-video bg-black rounded-2xl overflow-hidden group select-none shadow-2xl border border-neutral-800 flex items-center justify-center"
     >
-      {/* HTML5 Video Element */}
+      {/* HTML5 Video Element - Clicking or tapping the video NEVER toggles playback */}
       <video
         ref={videoRef}
         src={isHlsUrl(effectiveMediaSrc) && isHlsJsSupported() ? undefined : effectiveMediaSrc}
@@ -1735,8 +1753,24 @@ function VideoPlayerComponent({
               ? "object-cover"
               : "object-fill"
         }`}
-        onClick={handleVideoClick}
+        onClick={(e) => {
+          e.stopPropagation();
+          handleBackgroundClick(e);
+        }}
       />
+
+      {/* Tap-to-Reveal Overlay: Active ONLY when controls are hidden.
+          Consumes the first tap anywhere to reveal controls without triggering playback or underlying buttons */}
+      {!showControls && (
+        <div
+          data-testid="tap-reveal-shield"
+          className="absolute inset-0 z-15 cursor-pointer bg-transparent"
+          onClick={(e) => {
+            e.stopPropagation();
+            revealControls();
+          }}
+        />
+      )}
 
       {/* Buffering Indicator */}
       {isBuffering && !playbackError && (
@@ -1983,16 +2017,22 @@ function VideoPlayerComponent({
 
       {/* Centered Large YouTube-Style Controls (only rendered when user can control playback) */}
       {canControl && (
-        <div className="absolute inset-0 z-10 flex items-center justify-center gap-6 sm:gap-10 pointer-events-none transition-opacity duration-300">
+        <div
+          className={`absolute inset-0 z-10 flex items-center justify-center gap-6 sm:gap-10 pointer-events-none transition-opacity duration-300 ${
+            showControls ? "opacity-100" : "opacity-0 pointer-events-none"
+          }`}
+        >
           {/* Left: 10s Back */}
           <button
+            type="button"
             onClick={(e) => {
               e.stopPropagation();
+              if (isRevealTapRecently()) return;
               seekRelative(-10);
               resetControlsTimeout();
             }}
             className={`w-14 h-14 sm:w-16 sm:h-16 rounded-full bg-neutral-900/85 text-white flex flex-col items-center justify-center border border-neutral-750 shadow-xl transition pointer-events-auto relative hover:bg-rose-600 hover:border-rose-500 cursor-pointer ${
-              showControls ? "opacity-100 scale-100" : "opacity-0 scale-90 pointer-events-none"
+              showControls ? "opacity-100 scale-100 pointer-events-auto" : "opacity-0 scale-90 pointer-events-none"
             }`}
             title="Skip backward 10s"
           >
@@ -2000,15 +2040,17 @@ function VideoPlayerComponent({
             <span className="text-[9px] font-bold absolute bottom-2">10</span>
           </button>
 
-          {/* Center: Play/Pause */}
+          {/* Center: Play/Pause - ONLY toggles when explicitly clicked */}
           <button
+            type="button"
             onClick={(e) => {
               e.stopPropagation();
+              if (isRevealTapRecently()) return;
               togglePlayPause();
               resetControlsTimeout();
             }}
             className={`w-18 h-18 sm:w-20 sm:h-20 rounded-full bg-rose-600/90 text-white flex items-center justify-center shadow-2xl backdrop-blur-md transition pointer-events-auto relative hover:bg-rose-500 cursor-pointer ${
-              showControls || !isPlaying ? "opacity-100 scale-100" : "opacity-0 scale-90 pointer-events-none"
+              showControls ? "opacity-100 scale-100 pointer-events-auto" : "opacity-0 scale-90 pointer-events-none"
             }`}
             title={isPlaying ? "Pause (Space)" : "Play (Space)"}
           >
@@ -2021,13 +2063,15 @@ function VideoPlayerComponent({
 
           {/* Right: 10s Forward */}
           <button
+            type="button"
             onClick={(e) => {
               e.stopPropagation();
+              if (isRevealTapRecently()) return;
               seekRelative(10);
               resetControlsTimeout();
             }}
             className={`w-14 h-14 sm:w-16 sm:h-16 rounded-full bg-neutral-900/85 text-white flex flex-col items-center justify-center border border-neutral-750 shadow-xl transition pointer-events-auto relative hover:bg-rose-600 hover:border-rose-500 cursor-pointer ${
-              showControls ? "opacity-100 scale-100" : "opacity-0 scale-90 pointer-events-none"
+              showControls ? "opacity-100 scale-100 pointer-events-auto" : "opacity-0 scale-90 pointer-events-none"
             }`}
             title="Skip forward 10s"
           >
@@ -2040,13 +2084,15 @@ function VideoPlayerComponent({
       {/* Video Controls Bar Overlay */}
       <div
         className={`absolute inset-x-0 bottom-0 z-20 pt-16 pb-3 px-4 bg-gradient-to-t from-black/95 via-black/60 to-transparent transition-opacity duration-300 ${
-          showControls ? "opacity-100" : "opacity-0 pointer-events-none"
+          showControls ? "opacity-100 pointer-events-auto" : "opacity-0 pointer-events-none"
         }`}
         onClick={(e) => {
           e.stopPropagation();
           resetControlsTimeout();
         }}
-        onTouchStart={resetControlsTimeout}
+        onPointerMove={(e) => {
+          if (e.pointerType === "mouse") resetControlsTimeout();
+        }}
         onMouseMove={resetControlsTimeout}
       >
         {/* Scrubber / Progress Bar */}
@@ -2089,8 +2135,10 @@ function VideoPlayerComponent({
           <div className="flex items-center gap-2 sm:gap-3">
             {canControl && (
               <button
+                type="button"
                 onClick={(e) => {
                   e.stopPropagation();
+                  if (isRevealTapRecently()) return;
                   togglePlayPause();
                   resetControlsTimeout();
                 }}
@@ -2104,6 +2152,7 @@ function VideoPlayerComponent({
             {/* Volume */}
             <div className="flex items-center gap-1.5 group/vol">
               <button
+                type="button"
                 onClick={(e) => {
                   e.stopPropagation();
                   toggleMute();
@@ -2146,6 +2195,7 @@ function VideoPlayerComponent({
             {availableAudioTracks.length > 0 && (
               <div className="relative">
                 <button
+                  type="button"
                   onClick={(e) => {
                     e.stopPropagation();
                     setShowAudioMenu(!showAudioMenu);
@@ -2175,6 +2225,7 @@ function VideoPlayerComponent({
                     {availableAudioTracks.map((tr) => (
                       <button
                         key={tr.index}
+                        type="button"
                         onClick={() => handleAudioTrackSelect(tr.index)}
                         className={`w-full text-left px-2.5 py-1.5 rounded-lg text-xs flex items-center justify-between transition ${
                           currentAudioTrack === tr.index ? "bg-rose-600 text-white" : "text-neutral-300 hover:bg-neutral-800"
@@ -2193,6 +2244,7 @@ function VideoPlayerComponent({
             {availableQualities.length > 1 && (
               <div className="relative">
                 <button
+                  type="button"
                   onClick={(e) => {
                     e.stopPropagation();
                     setShowQualityMenu(!showQualityMenu);
@@ -2235,6 +2287,7 @@ function VideoPlayerComponent({
                     {availableQualities.map((q) => (
                       <button
                         key={q.id}
+                        type="button"
                         onClick={() => handleQualitySelect(q.id)}
                         className={`w-full text-left px-2.5 py-1.5 rounded-lg text-xs flex items-center justify-between transition ${
                           selectedQuality === q.id ? "bg-rose-600 text-white" : "text-neutral-300 hover:bg-neutral-800"
@@ -2273,6 +2326,7 @@ function VideoPlayerComponent({
             {/* Display Scale Mode Control */}
             <div className="relative">
               <button
+                type="button"
                 onClick={(e) => {
                   e.stopPropagation();
                   setShowDisplayMenu(!showDisplayMenu);
@@ -2302,6 +2356,7 @@ function VideoPlayerComponent({
                   {(["fit", "zoom", "stretch"] as const).map((mode) => (
                     <button
                       key={mode}
+                      type="button"
                       onClick={() => {
                         setDisplayMode(mode);
                         setShowDisplayMenu(false);
@@ -2320,6 +2375,7 @@ function VideoPlayerComponent({
 
             {/* Fullscreen Button (Available to all users, even if locked) */}
             <button
+              type="button"
               onClick={(e) => {
                 e.stopPropagation();
                 toggleFullscreen();
