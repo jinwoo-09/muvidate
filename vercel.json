@@ -1,11 +1,5 @@
 {
   "framework": "vite",
-  "crons": [
-    {
-      "path": "/api/cleanup-voice-notes",
-      "schedule": "0 2 * * *"
-    }
-  ],
   "rewrites": [
     {
       "source": "/api/(.*)",

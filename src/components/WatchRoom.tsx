@@ -64,7 +64,6 @@ export function WatchRoom({ roomCode, initialOfflineFile, onLeaveRoom }: WatchRo
   const [activeTab, setActiveTab] = useState<"chat" | "participants">("chat");
   const [showParticipantsMobile, setShowParticipantsMobile] = useState(false);
   const [isChangeMediaOpen, setIsChangeMediaOpen] = useState(false);
-  const [isVoiceRecording, setIsVoiceRecording] = useState(false);
 
   // Throttled sync updates
   const lastSyncWriteTime = useRef<number>(0);
@@ -554,7 +553,7 @@ export function WatchRoom({ roomCode, initialOfflineFile, onLeaveRoom }: WatchRo
         "playbackState/isPlaying": false
       });
 
-      // 2. Clear room chat/voice notes as required in Section 16 & 17
+      // 2. Clear room chat as required
       const chatRef = ref(rtdb, `rooms/${roomCode}/chat`);
       await set(chatRef, null);
     } catch (err) {
@@ -855,7 +854,7 @@ export function WatchRoom({ roomCode, initialOfflineFile, onLeaveRoom }: WatchRo
             <div>
               <h4 className="text-base font-bold text-white">The movie has finished!</h4>
               <p className="text-xs text-neutral-400 mt-0.5">
-                Watch session ended. Real-time chat & voice notes have been cleared.
+                Watch session ended. Real-time chat has been cleared.
               </p>
             </div>
           </div>
@@ -910,7 +909,6 @@ export function WatchRoom({ roomCode, initialOfflineFile, onLeaveRoom }: WatchRo
                 onVideoEnded={handleVideoEnded}
                 roomCode={roomCode}
                 currentUserId={user?.uid}
-                isVoiceRecording={isVoiceRecording}
                 seriesStructure={roomSeriesStructure}
                 currentSeason={room.season || 1}
                 currentEpisode={room.episode || 1}
@@ -1008,7 +1006,6 @@ export function WatchRoom({ roomCode, initialOfflineFile, onLeaveRoom }: WatchRo
                 roomCode={roomCode}
                 adminUid={room.adminUid}
                 isMovieCompleted={room.movieCompleted}
-                onRecordingStateChange={setIsVoiceRecording}
               />
             ) : (
               <div className="h-full bg-neutral-900/90 border border-neutral-800 rounded-2xl p-4 overflow-y-auto">

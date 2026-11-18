@@ -51,12 +51,9 @@ export interface ChatMessage {
   uid: string;
   username: string;
   photoURL?: string;
-  type: 'text' | 'voice' | 'system';
+  type: 'text' | 'system';
   text?: string;
-  audioUrl?: string | null;
   createdAt: number;
-  expiresAt?: number;
-  isExpired?: boolean;
 }
 
 export interface Room {

@@ -274,7 +274,7 @@ export function CreateRoomModal({
           <div>
             <h3 className="text-xl font-bold font-heading text-white">Create Watch Room</h3>
             <p className="text-xs text-neutral-400">
-              Watch together in real-time with synchronized playback, live chat & voice notes.
+              Watch together in real-time with synchronized playback and live chat.
             </p>
           </div>
         </div>

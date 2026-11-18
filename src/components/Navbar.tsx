@@ -92,7 +92,7 @@ export function Navbar({
             <button
               onClick={onUploadMovieClick}
               className="p-2 bg-neutral-900 hover:bg-neutral-800 border border-neutral-750 text-neutral-300 hover:text-white rounded-xl transition"
-              title="Upload Movie to Firestore"
+              title="Add Movie to Firestore"
             >
               <Upload className="w-4 h-4" />
             </button>
@@ -200,7 +200,7 @@ export function Navbar({
                     className="text-xs text-neutral-400 hover:text-white flex items-center gap-2 py-1.5"
                   >
                     <Upload className="w-4 h-4 text-neutral-500" />
-                    <span>Upload Movie (MP4)</span>
+                    <span>Add Movie</span>
                   </button>
 
                   <button

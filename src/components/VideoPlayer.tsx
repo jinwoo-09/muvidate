@@ -64,7 +64,6 @@ export interface VideoPlayerProps {
   onVideoEnded?: () => void;
   roomCode?: string;
   currentUserId?: string;
-  isVoiceRecording?: boolean;
   seriesStructure?: SeriesStructure;
   currentSeason?: number;
   currentEpisode?: number;
@@ -83,7 +82,6 @@ function VideoPlayerComponent({
   onVideoEnded,
   roomCode,
   currentUserId,
-  isVoiceRecording = false,
   seriesStructure: propSeriesStructure,
   currentSeason: propCurrentSeason,
   currentEpisode: propCurrentEpisode,
@@ -182,7 +180,6 @@ function VideoPlayerComponent({
   const isApplyingRemoteSyncRef = useRef(false);
   const isUserIntentionalActionRef = useRef(false);
   const hasSystemInterruptionRef = useRef(false);
-  const preVoiceRecordingMutedRef = useRef<boolean | null>(null);
 
   const lastEmittedState = useRef<{ isPlaying: boolean; currentTime: number } | null>(null);
   const lastSyncProcessedRef = useRef<{
@@ -565,27 +562,6 @@ function VideoPlayerComponent({
     }
     resetControlsTimeout();
   };
-
-  // Handle voice note recording: mute video during recording without pausing; restore previous mute state afterwards
-  useEffect(() => {
-    const video = videoRef.current;
-    if (!video) return;
-
-    if (isVoiceRecording) {
-      if (preVoiceRecordingMutedRef.current === null) {
-        preVoiceRecordingMutedRef.current = video.muted;
-      }
-      video.muted = true;
-      setIsMuted(true);
-    } else {
-      if (preVoiceRecordingMutedRef.current !== null) {
-        const wasMutedBefore = preVoiceRecordingMutedRef.current;
-        preVoiceRecordingMutedRef.current = null;
-        video.muted = wasMutedBefore;
-        setIsMuted(wasMutedBefore);
-      }
-    }
-  }, [isVoiceRecording]);
 
   // Auto-hide controls after 2.5 seconds of inactivity
   const resetControlsTimeout = useCallback(() => {
@@ -1427,10 +1403,7 @@ function VideoPlayerComponent({
       const msgTime = Number(msg.createdAt) || 0;
       if (msgTime < fullscreenEnteredAtRef.current) return;
 
-      const displayContent =
-        msg.type === "voice"
-          ? "🎤 Sent a voice note"
-          : (msg.text || "");
+      const displayContent = msg.text || "";
 
       if (!displayContent) return;
 

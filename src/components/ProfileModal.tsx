@@ -1,20 +1,45 @@
-import React, { useState, useRef } from "react";
+import React, { useState, useEffect, useRef } from "react";
 import { useAuth } from "../context/AuthContext";
-import { uploadProfilePictureToAnonDrop } from "../lib/anondropUpload";
-import { X, Camera, Loader2, AlertCircle, CheckCircle, Copy, User, Instagram, KeyRound, Eye, EyeOff, LogOut } from "lucide-react";
+import {
+  X,
+  Loader2,
+  AlertCircle,
+  CheckCircle,
+  Copy,
+  Instagram,
+  KeyRound,
+  Eye,
+  EyeOff,
+  LogOut,
+  Link2,
+  Check
+} from "lucide-react";
 
 interface ProfileModalProps {
   isOpen: boolean;
   onClose: () => void;
 }
 
+function isValidHttpUrl(value: string): boolean {
+  const trimmed = value.trim();
+  if (!trimmed) return false;
+  try {
+    const parsed = new URL(trimmed);
+    return parsed.protocol === "http:" || parsed.protocol === "https:";
+  } catch {
+    return false;
+  }
+}
+
 export function ProfileModal({ isOpen, onClose }: ProfileModalProps) {
   const { profile, user, updatePhoto, setPassword, logout } = useAuth();
-  const [uploading, setUploading] = useState(false);
+  const [photoUrlInput, setPhotoUrlInput] = useState("");
+  const [savingPhoto, setSavingPhoto] = useState(false);
+  const [previewLoadError, setPreviewLoadError] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [success, setSuccess] = useState<string | null>(null);
   const [copied, setCopied] = useState(false);
-  const fileInputRef = useRef<HTMLInputElement>(null);
+  const photoInputRef = useRef<HTMLInputElement>(null);
 
   // Password setting state
   const [isChangingPassword, setIsChangingPassword] = useState(false);
@@ -23,38 +48,58 @@ export function ProfileModal({ isOpen, onClose }: ProfileModalProps) {
   const [showPassword, setShowPassword] = useState(false);
   const [savingPassword, setSavingPassword] = useState(false);
 
+  // Sync photo URL input when modal opens or saved profile photo changes
+  useEffect(() => {
+    if (isOpen && profile) {
+      setPhotoUrlInput(profile.photoURL || "");
+      setPreviewLoadError(false);
+      setError(null);
+      setSuccess(null);
+    }
+  }, [isOpen, profile?.photoURL]);
+
+  const trimmedPhotoInput = photoUrlInput.trim();
+  const isCandidateValidUrl = isValidHttpUrl(trimmedPhotoInput);
+  const previewUrl = isCandidateValidUrl
+    ? trimmedPhotoInput
+    : profile?.photoURL || "";
+
+  useEffect(() => {
+    setPreviewLoadError(false);
+  }, [previewUrl]);
+
   if (!isOpen || !profile) return null;
 
-  const handleFileChange = async (e: React.ChangeEvent<HTMLInputElement>) => {
-    const file = e.target.files?.[0];
-    if (!file) return;
+  const savedPhotoUrl = profile.photoURL || "";
+  const hasPhotoChanges = trimmedPhotoInput !== savedPhotoUrl;
 
-    // Validate image format
-    if (!file.type.startsWith("image/")) {
-      setError("Please select a valid image file (PNG, JPG, WebP, GIF).");
-      return;
-    }
-
-    if (file.size > 10 * 1024 * 1024) {
-      setError("Image size exceeds 10MB limit.");
-      return;
-    }
-
+  const handleSavePhotoUrl = async (e: React.FormEvent) => {
+    e.preventDefault();
     setError(null);
     setSuccess(null);
-    setUploading(true);
 
+    if (!isCandidateValidUrl) {
+      setError("Please enter a valid HTTP or HTTPS image URL.");
+      return;
+    }
+
+    setSavingPhoto(true);
     try {
-      const photoUrl = await uploadProfilePictureToAnonDrop(file);
-      await updatePhoto(photoUrl);
+      await updatePhoto(trimmedPhotoInput);
       setSuccess("Profile picture updated successfully!");
     } catch (err: any) {
-      console.error("Avatar upload failed:", err);
-      setError(err.message || "Failed to upload image. Please try again.");
+      console.error("Failed to save profile picture URL:", err);
+      setError(err.message || "Failed to update profile picture URL. Please try again.");
     } finally {
-      setUploading(false);
-      if (fileInputRef.current) fileInputRef.current.value = "";
+      setSavingPhoto(false);
     }
+  };
+
+  const handleCancelPhotoEdit = () => {
+    setPhotoUrlInput(savedPhotoUrl);
+    setPreviewLoadError(false);
+    setError(null);
+    setSuccess(null);
   };
 
   const handleSavePassword = async (e: React.FormEvent) => {
@@ -106,15 +151,18 @@ export function ProfileModal({ isOpen, onClose }: ProfileModalProps) {
 
         <h3 className="text-xl font-bold font-heading text-white mb-6">Your Profile</h3>
 
-        <div className="flex flex-col items-center text-center mb-6">
-          <div className="relative group mb-3">
+        {/* Avatar Preview */}
+        <div className="flex flex-col items-center text-center mb-5">
+          <div className="relative mb-3">
             <div className="w-24 h-24 rounded-full overflow-hidden border-2 border-rose-500/50 bg-neutral-800 flex items-center justify-center text-white font-bold text-2xl shadow-xl">
-              {profile.photoURL ? (
+              {previewUrl && !previewLoadError ? (
                 <img
-                  src={profile.photoURL}
+                  src={previewUrl}
                   alt={profile.username}
                   className="w-full h-full object-cover"
                   referrerPolicy="no-referrer"
+                  onLoad={() => setPreviewLoadError(false)}
+                  onError={() => setPreviewLoadError(true)}
                 />
               ) : (
                 <span className="text-rose-400">{initials}</span>
@@ -122,28 +170,27 @@ export function ProfileModal({ isOpen, onClose }: ProfileModalProps) {
             </div>
 
             <button
-              onClick={() => fileInputRef.current?.click()}
-              disabled={uploading}
-              className="absolute bottom-0 right-0 p-2 bg-rose-600 hover:bg-rose-500 text-white rounded-full border-2 border-neutral-900 shadow-md transition disabled:opacity-50"
-              title="Change profile picture"
+              type="button"
+              onClick={() => photoInputRef.current?.focus()}
+              className="absolute bottom-0 right-0 p-2 bg-rose-600 hover:bg-rose-500 text-white rounded-full border-2 border-neutral-900 shadow-md transition"
+              title="Edit profile picture URL"
             >
-              {uploading ? (
-                <Loader2 className="w-4 h-4 animate-spin" />
-              ) : (
-                <Camera className="w-4 h-4" />
-              )}
+              <Link2 className="w-3.5 h-3.5" />
             </button>
-            <input
-              ref={fileInputRef}
-              type="file"
-              accept="image/*"
-              className="hidden"
-              onChange={handleFileChange}
-            />
           </div>
 
-          <p className="text-xs text-neutral-400">Click the camera icon to upload a new avatar</p>
-          <h4 className="text-xl font-bold text-white mt-3">@{profile.username}</h4>
+          {hasPhotoChanges && isCandidateValidUrl && !previewLoadError && (
+            <span className="text-[11px] font-medium text-amber-400 bg-amber-500/10 border border-amber-500/25 px-2.5 py-0.5 rounded-full mb-1">
+              Previewing new avatar URL (unsaved)
+            </span>
+          )}
+          {previewLoadError && trimmedPhotoInput && (
+            <span className="text-[11px] font-medium text-rose-400">
+              Could not load image preview from this URL
+            </span>
+          )}
+
+          <h4 className="text-xl font-bold text-white mt-1">@{profile.username}</h4>
           <span className="inline-block mt-1 px-2.5 py-0.5 rounded-full text-[11px] font-medium bg-rose-500/15 text-rose-400 border border-rose-500/30">
             Account Active
           </span>
@@ -164,6 +211,66 @@ export function ProfileModal({ isOpen, onClose }: ProfileModalProps) {
         )}
 
         <div className="space-y-3 mb-4">
+          {/* Profile Picture URL Editor */}
+          <form
+            onSubmit={handleSavePhotoUrl}
+            className="bg-neutral-950/80 rounded-xl p-4 border border-neutral-800/80 space-y-2.5"
+          >
+            <div className="flex items-center justify-between">
+              <label
+                htmlFor="profile-photo-url"
+                className="flex items-center gap-2 text-xs font-semibold text-neutral-200"
+              >
+                <Link2 className="w-3.5 h-3.5 text-rose-400" />
+                <span>Profile Picture URL</span>
+              </label>
+              <span className="text-[10px] text-neutral-500">HTTP / HTTPS</span>
+            </div>
+
+            <input
+              id="profile-photo-url"
+              ref={photoInputRef}
+              type="url"
+              value={photoUrlInput}
+              onChange={(e) => {
+                setPhotoUrlInput(e.target.value);
+                if (error) setError(null);
+                if (success) setSuccess(null);
+              }}
+              placeholder="https://example.com/avatar.jpg"
+              disabled={savingPhoto}
+              className="w-full px-3 py-2 bg-neutral-900 border border-neutral-700 rounded-lg text-xs text-white placeholder-neutral-500 focus:outline-none focus:border-rose-500 transition"
+            />
+
+            <div className="flex items-center justify-end gap-2 pt-0.5">
+              <button
+                type="button"
+                onClick={handleCancelPhotoEdit}
+                disabled={savingPhoto}
+                className="px-3 py-1.5 bg-neutral-800 hover:bg-neutral-700 text-neutral-300 hover:text-white text-xs font-medium rounded-lg transition disabled:opacity-50"
+              >
+                Cancel
+              </button>
+              <button
+                type="submit"
+                disabled={savingPhoto || !trimmedPhotoInput}
+                className="px-3.5 py-1.5 bg-rose-600 hover:bg-rose-500 text-white text-xs font-semibold rounded-lg transition disabled:opacity-50 flex items-center gap-1.5"
+              >
+                {savingPhoto ? (
+                  <>
+                    <Loader2 className="w-3.5 h-3.5 animate-spin" />
+                    <span>Saving...</span>
+                  </>
+                ) : (
+                  <>
+                    <Check className="w-3.5 h-3.5" />
+                    <span>Save</span>
+                  </>
+                )}
+              </button>
+            </div>
+          </form>
+
           {/* Password Setup / Change Section */}
           <div className="bg-neutral-950/80 rounded-xl p-4 border border-neutral-800/80">
             {!isChangingPassword ? (

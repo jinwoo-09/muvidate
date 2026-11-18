@@ -355,7 +355,7 @@ function MainContent() {
             <div>
               <h3 className="text-sm font-bold text-white">Have a 4-Digit Room Code?</h3>
               <p className="text-xs text-neutral-400">
-                Join friends instantly with synchronized playback, live chat & voice notes.
+                Join friends instantly with synchronized playback and live chat.
               </p>
             </div>
           </div>
@@ -499,7 +499,7 @@ function MainContent() {
                 {searchQuery
                   ? `No titles matched "${searchQuery}". Try searching for another genre or keyword.`
                   : isPremium
-                    ? "Upload the first MP4 movie to MuviDate or stream via direct URL."
+                    ? "Add the first movie or series URL to MuviDate."
                     : "Create a Watch Room with an offline video or direct URL to start watching together!"}
               </p>
               {searchQuery ? (
@@ -518,7 +518,7 @@ function MainContent() {
                   className="px-5 py-2.5 bg-rose-600 hover:bg-rose-500 text-white text-xs font-semibold rounded-xl shadow transition flex items-center gap-1.5"
                 >
                   <PlusCircle className="w-4 h-4" />
-                  <span>Upload Movie Now</span>
+                  <span>Add Movie Now</span>
                 </button>
               ) : (
                 <button

@@ -3,9 +3,7 @@ import { useAuth } from "../context/AuthContext";
 import { rtdb, getUserProfile } from "../lib/firebase";
 import { ref, onValue, off, push, set, update } from "firebase/database";
 import { ChatMessage } from "../types";
-import { VoiceNoteRecorder } from "./VoiceNoteRecorder";
-import { VoiceNotePlayer } from "./VoiceNotePlayer";
-import { Send, MessageSquare, Shield, Smile, X, Clock } from "lucide-react";
+import { Send, MessageSquare, Shield, X } from "lucide-react";
 
 // In-memory cache for user avatars across the app session to avoid redundant Firestore queries
 const avatarMemoryCache = new Map<string, string>();
@@ -15,14 +13,12 @@ interface RoomChatProps {
   roomCode: string;
   adminUid: string;
   isMovieCompleted: boolean;
-  onRecordingStateChange?: (isRecording: boolean) => void;
 }
 
 export function RoomChat({ 
   roomCode, 
   adminUid, 
-  isMovieCompleted,
-  onRecordingStateChange 
+  isMovieCompleted
 }: RoomChatProps) {
   const { user, profile } = useAuth();
   const [messages, setMessages] = useState<ChatMessage[]>([]);
@@ -51,10 +47,12 @@ export function RoomChat({
         return;
       }
 
-      const list: ChatMessage[] = Object.keys(val).map((k) => ({
-        id: k,
-        ...val[k]
-      }));
+      const list: ChatMessage[] = Object.keys(val)
+        .map((k) => ({
+          id: k,
+          ...val[k]
+        }))
+        .filter((m) => m.type === "system" || (m.type === "text" && typeof m.text === "string" && m.text.trim() !== ""));
 
       // Sort chronologically by createdAt
       list.sort((a, b) => (a.createdAt || 0) - (b.createdAt || 0));
@@ -191,33 +189,6 @@ export function RoomChat({
     }
   };
 
-  const handleVoiceNoteUploaded = async (audioUrl: string) => {
-    if (!user || !profile || isMovieCompleted) return;
-    const chatRef = ref(rtdb, `rooms/${roomCode}/chat`);
-    const newMsgRef = push(chatRef);
-    const photoURL = profile.photoURL || avatarMemoryCache.get(user.uid) || "";
-    const now = Date.now();
-    const msg: ChatMessage = {
-      id: newMsgRef.key || now.toString(),
-      uid: user.uid,
-      username: profile.username,
-      photoURL,
-      type: "voice",
-      audioUrl,
-      createdAt: now,
-      expiresAt: now + 24 * 60 * 60 * 1000,
-      isExpired: false
-    };
-    await set(newMsgRef, msg);
-
-    // Ensure user presence is active in the room upon sending voice note
-    const participantRef = ref(rtdb, `rooms/${roomCode}/participants/${user.uid}`);
-    update(participantRef, {
-      isOnline: true,
-      lastActive: Date.now()
-    }).catch(() => {});
-  };
-
   const formatTime = (timestamp?: number) => {
     if (!timestamp) return "";
     const date = new Date(timestamp);
@@ -246,13 +217,13 @@ export function RoomChat({
         {isMovieCompleted ? (
           <div className="flex flex-col items-center justify-center h-full text-center p-6 text-neutral-500">
             <p className="text-sm font-semibold text-neutral-300">Session Ended</p>
-            <p className="text-xs mt-1">Chat and voice notes are closed because the movie has finished.</p>
+            <p className="text-xs mt-1">Chat is closed because the movie has finished.</p>
           </div>
         ) : messages.length === 0 ? (
           <div className="flex flex-col items-center justify-center h-full text-center p-6 text-neutral-500">
             <MessageSquare className="w-8 h-8 stroke-1 text-neutral-600 mb-2" />
             <p className="text-sm font-medium text-neutral-300">Be the first to say something.</p>
-            <p className="text-xs text-neutral-500 mt-1">Send a message or voice note to your watch party.</p>
+            <p className="text-xs text-neutral-500 mt-1">Send a message to your watch party.</p>
           </div>
         ) : (
           messages.map((msg) => {
@@ -324,26 +295,15 @@ export function RoomChat({
                     </span>
                   </div>
 
-                  {msg.type === "voice" ? (
-                    msg.isExpired || !msg.audioUrl || (msg.createdAt && Date.now() - msg.createdAt >= 24 * 60 * 60 * 1000) ? (
-                      <div className="flex items-center gap-2 px-3 py-2 rounded-xl bg-neutral-900/90 border border-neutral-800 text-neutral-400 text-xs italic">
-                        <Clock className="w-3.5 h-3.5 text-neutral-500 shrink-0" />
-                        <span>Voice note expired (24h limit)</span>
-                      </div>
-                    ) : (
-                      <VoiceNotePlayer audioUrl={msg.audioUrl} />
-                    )
-                  ) : (
-                    <div
-                      className={`px-3.5 py-2 rounded-2xl text-xs leading-relaxed break-words shadow-sm ${
-                        isMe
-                          ? "bg-rose-600 text-white rounded-tr-sm"
-                          : "bg-neutral-800 text-neutral-100 rounded-tl-sm border border-neutral-750"
-                      }`}
-                    >
-                      {msg.text}
-                    </div>
-                  )}
+                  <div
+                    className={`px-3.5 py-2 rounded-2xl text-xs leading-relaxed break-words shadow-sm ${
+                      isMe
+                        ? "bg-rose-600 text-white rounded-tr-sm"
+                        : "bg-neutral-800 text-neutral-100 rounded-tl-sm border border-neutral-750"
+                    }`}
+                  >
+                    {msg.text}
+                  </div>
                 </div>
               </div>
             );
@@ -351,7 +311,7 @@ export function RoomChat({
         )}
       </div>
 
-      {/* Message Input & Voice Note */}
+      {/* Message Input */}
       <div 
         className="p-2.5 sm:p-3 border-t border-neutral-800 bg-neutral-950/95 transition-all duration-150"
         style={{
@@ -370,11 +330,6 @@ export function RoomChat({
             action="#" 
             className="flex items-center gap-2"
           >
-            <VoiceNoteRecorder
-              onVoiceNoteUploaded={handleVoiceNoteUploaded}
-              onRecordingStateChange={onRecordingStateChange}
-              disabled={isMovieCompleted}
-            />
 
             <input
               ref={chatInputRef}
