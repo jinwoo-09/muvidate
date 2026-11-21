@@ -62,6 +62,7 @@ export function WatchRoom({ roomCode, initialOfflineFile, onLeaveRoom }: WatchRo
   const [copied, setCopied] = useState(false);
   const [shared, setShared] = useState(false);
   const [activeTab, setActiveTab] = useState<"chat" | "participants">("chat");
+  const [showParticipantsMobile, setShowParticipantsMobile] = useState(false);
   const [isChangeMediaOpen, setIsChangeMediaOpen] = useState(false);
 
   // Throttled sync updates
@@ -239,6 +240,8 @@ export function WatchRoom({ roomCode, initialOfflineFile, onLeaveRoom }: WatchRo
       setRoom((prev) => {
         if (!prev) return data;
 
+        // Isolate chat changes: WatchRoom does not render data.chat directly
+        // Chat is handled independently in RoomChat.tsx and VideoPlayer's fullscreen overlay
         const isPlaybackIdentical =
           prev.playbackState?.lastUpdated === data.playbackState?.lastUpdated &&
           prev.playbackState?.isPlaying === data.playbackState?.isPlaying &&
@@ -264,6 +267,7 @@ export function WatchRoom({ roomCode, initialOfflineFile, onLeaveRoom }: WatchRo
           (prev as any).subtitle3 === (data as any).subtitle3 &&
           prev.seriesUrls === data.seriesUrls;
 
+        // Compare participants active count
         const prevParticipants = prev.participants || {};
         const newParticipants = data.participants || {};
         const prevKeys = Object.keys(prevParticipants);
@@ -272,10 +276,12 @@ export function WatchRoom({ roomCode, initialOfflineFile, onLeaveRoom }: WatchRo
           prevKeys.length === newKeys.length &&
           prevKeys.every((k) => prevParticipants[k]?.isOnline === newParticipants[k]?.isOnline);
 
+        // If only chat or internal noise changed, keep previous reference to prevent re-renders
         if (isPlaybackIdentical && isMetadataIdentical && isParticipantsIdentical) {
           return prev;
         }
 
+        // Preserve playbackState object reference if playback did not change
         if (isPlaybackIdentical) {
           return {
             ...data,
@@ -301,6 +307,7 @@ export function WatchRoom({ roomCode, initialOfflineFile, onLeaveRoom }: WatchRo
     const connectedRef = ref(rtdb, ".info/connected");
     const participantRef = ref(rtdb, `rooms/${roomCode}/participants/${user.uid}`);
 
+    // Mark online immediately upon component mount/join
     update(participantRef, {
       isOnline: true,
       username: profile.username,
@@ -308,6 +315,7 @@ export function WatchRoom({ roomCode, initialOfflineFile, onLeaveRoom }: WatchRo
       lastActive: Date.now()
     }).catch(() => {});
 
+    // Register onDisconnect handler
     onDisconnect(participantRef).update({
       isOnline: false,
       lastActive: Date.now()
@@ -316,6 +324,7 @@ export function WatchRoom({ roomCode, initialOfflineFile, onLeaveRoom }: WatchRo
     const handleConnectionChange = (snap: any) => {
       const isConnected = snap.val() === true;
       if (isConnected) {
+        // Immediately write/update presence as online/active upon successful connection/reconnect
         update(participantRef, {
           isOnline: true,
           username: profile.username,
@@ -323,6 +332,7 @@ export function WatchRoom({ roomCode, initialOfflineFile, onLeaveRoom }: WatchRo
           lastActive: Date.now()
         }).catch(() => {});
 
+        // Re-register onDisconnect handler because Firebase disconnect triggers are connection-specific
         onDisconnect(participantRef).update({
           isOnline: false,
           lastActive: Date.now()
@@ -332,6 +342,7 @@ export function WatchRoom({ roomCode, initialOfflineFile, onLeaveRoom }: WatchRo
 
     onValue(connectedRef, handleConnectionChange);
 
+    // Also touch presence on browser online event and window focus to guarantee immediate recovery
     const handleBrowserOnlineOrFocus = () => {
       if (navigator.onLine) {
         update(participantRef, {
@@ -351,6 +362,7 @@ export function WatchRoom({ roomCode, initialOfflineFile, onLeaveRoom }: WatchRo
       window.removeEventListener("focus", handleBrowserOnlineOrFocus);
       document.removeEventListener("visibilitychange", handleBrowserOnlineOrFocus);
 
+      // Cancel onDisconnect on clean component teardown
       onDisconnect(participantRef).cancel().catch(() => {});
     };
   }, [roomCode, user?.uid, profile?.username, profile?.photoURL]);
@@ -367,6 +379,7 @@ export function WatchRoom({ roomCode, initialOfflineFile, onLeaveRoom }: WatchRo
   useEffect(() => {
     return () => {
       if (user && profile && roomCode) {
+        // Save latest valid video playback timeline so rejoining resumes at last valid position
         if (latestPlaybackStateRef.current && (isHost || !controlsLockedRef.current)) {
           const lastPlayback = latestPlaybackStateRef.current;
           if (lastPlayback.currentTime > 0) {
@@ -391,6 +404,7 @@ export function WatchRoom({ roomCode, initialOfflineFile, onLeaveRoom }: WatchRo
     const currentParticipants = room.participants;
     const prevParticipants = prevParticipantsRef.current;
 
+    // On the first snapshot, simply record initial participant states without emitting any messages
     if (!isInitialSnapshotRef.current) {
       isInitialSnapshotRef.current = true;
       const initialStatuses: Record<string, boolean> = {};
@@ -422,6 +436,7 @@ export function WatchRoom({ roomCode, initialOfflineFile, onLeaveRoom }: WatchRo
         const lastLeaveMsgTime = p.lastLeaveMsgTime || 0;
         const lastRecord = lastPresenceMessageTimestampRef.current[uid];
 
+        // Check if a leave message was already recorded or sent for this leave transition
         const alreadyProcessedLocally = lastRecord?.lastActive === lastActive;
         const alreadyProcessedInRTDB = lastLeaveMsgTime > 0 && Math.abs(lastLeaveMsgTime - lastActive) < 10000;
 
@@ -443,7 +458,7 @@ export function WatchRoom({ roomCode, initialOfflineFile, onLeaveRoom }: WatchRo
     prevParticipantsRef.current = nextStatuses;
   }, [room?.participants, user?.uid, roomCode, postSystemMessage]);
 
-  // Sync state emitter from VideoPlayer
+// Sync state emitter from VideoPlayer
   const handlePlaybackChange = useCallback((state: { isPlaying: boolean; currentTime: number }) => {
     if (!user || !profile || !roomCode) return;
     const now = Date.now();
@@ -454,6 +469,7 @@ export function WatchRoom({ roomCode, initialOfflineFile, onLeaveRoom }: WatchRo
     };
     if (controlsLockedRef.current && !isHost) return;
 
+    // Throttle frequent updates to avoid spamming RTDB
     lastSyncWriteTime.current = now;
 
     const playbackRef = ref(rtdb, `rooms/${roomCode}/playbackState`);
@@ -480,7 +496,7 @@ export function WatchRoom({ roomCode, initialOfflineFile, onLeaveRoom }: WatchRo
     }).catch(console.error);
   }, [isHost, roomCode, user, profile]);
 
-  // Admin toggling control lock
+  // Admin toggling control lock (UI permission state only)
   const handleToggleControlLock = async () => {
     if (!isHost || !room) return;
     const roomRef = ref(rtdb, `rooms/${roomCode}`);
@@ -489,7 +505,7 @@ export function WatchRoom({ roomCode, initialOfflineFile, onLeaveRoom }: WatchRo
     }).catch(console.error);
   };
 
-  // Series Episode / Season Selection handler
+  // Series Episode / Season Selection handler with RTDB synchronization
   const handleSelectEpisode = useCallback((seasonNum: number, episodeNum: number, episodeUrl: string) => {
     if (!roomCode) return;
     const canControl = isHost || !controlsLockedRef.current;
@@ -517,6 +533,7 @@ export function WatchRoom({ roomCode, initialOfflineFile, onLeaveRoom }: WatchRo
   const handleVideoEnded = useCallback(async () => {
     if (!roomCode) return;
     try {
+      // Auto-advance if this is a series and there is a next episode in this season
       if (roomSeriesStructure && roomSeriesStructure.isSeries && room) {
         const currentSeasonNum = room.season || 1;
         const currentEpNum = room.episode || 1;
@@ -529,12 +546,14 @@ export function WatchRoom({ roomCode, initialOfflineFile, onLeaveRoom }: WatchRo
         }
       }
 
+      // 1. Mark movie as completed
       const roomRef = ref(rtdb, `rooms/${roomCode}`);
       await update(roomRef, {
         movieCompleted: true,
         "playbackState/isPlaying": false
       });
 
+      // 2. Clear room chat as required
       const chatRef = ref(rtdb, `rooms/${roomCode}/chat`);
       await set(chatRef, null);
     } catch (err) {
@@ -542,6 +561,7 @@ export function WatchRoom({ roomCode, initialOfflineFile, onLeaveRoom }: WatchRo
     }
   }, [roomCode, roomSeriesStructure, room, isHost, handleSelectEpisode]);
 
+  // Replay movie option for host
   const handleReplayMovie = async () => {
     if (!isHost || !room) return;
     const roomRef = ref(rtdb, `rooms/${roomCode}`);
@@ -552,12 +572,14 @@ export function WatchRoom({ roomCode, initialOfflineFile, onLeaveRoom }: WatchRo
     });
   };
 
+  // Copy room code
   const copyRoomCode = () => {
     navigator.clipboard.writeText(roomCode);
     setCopied(true);
     setTimeout(() => setCopied(false), 2000);
   };
 
+  // Share using Web Share API or copy
   const shareRoom = async () => {
     const shareText = `Join my watch party on MuviDate! Room Code: ${roomCode}`;
     const shareUrl = window.location.href;
@@ -573,12 +595,15 @@ export function WatchRoom({ roomCode, initialOfflineFile, onLeaveRoom }: WatchRo
         setTimeout(() => setShared(false), 2000);
         return;
       } catch (err) {
-        // Fallback
+        // Fallback to clipboard
       }
     }
     copyRoomCode();
   };
 
+
+
+  // Handle participant selecting their offline file
   const handleOfflineFileSelect = async (e: React.ChangeEvent<HTMLInputElement>) => {
     const file = e.target.files?.[0];
     if (!file) return;
@@ -589,9 +614,10 @@ export function WatchRoom({ roomCode, initialOfflineFile, onLeaveRoom }: WatchRo
     try {
       const localDuration = await getVideoDuration(file);
 
+      // Verify duration against room's expected offlineDuration
       if (room && room.offlineDuration && room.offlineDuration > 0) {
         const durationDiff = Math.abs(localDuration - room.offlineDuration);
-        if (durationDiff > 1.5) {
+        if (durationDiff > 1.5) { // 1.5s tolerance
           setOfflineDurationError(
             `This video duration does not match the room video. Please select the same video. (Expected ~${formatVideoTime(room.offlineDuration)}, selected file is ${formatVideoTime(localDuration)})`
           );
@@ -657,296 +683,297 @@ export function WatchRoom({ roomCode, initialOfflineFile, onLeaveRoom }: WatchRo
   const activeParticipantsCount = participantsList.filter((p) => p.isOnline).length;
 
   return (
-    <div className="min-h-screen bg-neutral-950 text-neutral-100 flex flex-col pt-[max(env(safe-area-inset-top),0px)]">
-      {/* 1. FIXED FLOATING VIDEO PLAYER AT THE TOP */}
-      <div 
-        className="sticky top-0 z-[50000] w-full bg-neutral-950/95 backdrop-blur-xl border-b border-neutral-800/80 shadow-2xl transition-all"
-        style={{
-          top: "max(env(safe-area-inset-top), 0px)"
-        }}
-      >
-        <div className="max-w-7xl mx-auto px-2 sm:px-4 py-1.5 sm:py-2">
-          {effectiveVideoSrc ? (
-            <VideoPlayer
-              src={effectiveVideoSrc}
-              poster={room.moviePoster}
-              isHost={isHost}
-              controlsLocked={room.controlsLocked}
-              syncState={room.playbackState}
-              onPlaybackChange={handlePlaybackChange}
-              onAudioTrackChange={handleAudioTrackChange}
-              onVideoEnded={handleVideoEnded}
-              roomCode={roomCode}
-              currentUserId={user?.uid}
-              seriesStructure={roomSeriesStructure}
-              currentSeason={room.season || 1}
-              currentEpisode={room.episode || 1}
-              onSelectEpisode={handleSelectEpisode}
-              subtitle={effectiveSubtitle}
-            />
+    <div className="max-w-7xl mx-auto px-3 sm:px-6 py-4 space-y-4">
+      {/* Top Navigation & Status Bar - Normal scrolling element */}
+      <div className="flex flex-wrap items-center justify-between gap-3 p-3 bg-neutral-900/90 border border-neutral-800 rounded-2xl backdrop-blur-md shadow-xl">
+        <div className="flex items-center gap-3">
+          <button
+            onClick={handleExplicitLeaveRoom}
+            className="p-2 text-neutral-400 hover:text-white rounded-xl hover:bg-neutral-800 transition flex items-center gap-1.5 text-xs font-semibold"
+            title="Leave Room"
+          >
+            <LogOut className="w-4 h-4" />
+            <span className="hidden sm:inline">Leave Room</span>
+          </button>
+
+          <div className="h-4 w-px bg-neutral-800" />
+
+          {/* Room Code Badge */}
+          <div className="flex items-center gap-2 bg-neutral-950 px-3 py-1.5 rounded-xl border border-neutral-800">
+            <span className="text-[10px] uppercase font-bold tracking-wider text-neutral-400">
+              Code:
+            </span>
+            <span className="font-mono text-base font-extrabold tracking-widest text-white">
+              {room.roomCode}
+            </span>
+            <button
+              onClick={copyRoomCode}
+              className="p-1 text-neutral-400 hover:text-white rounded transition"
+              title="Copy 4-digit code"
+            >
+              {copied ? <Check className="w-3.5 h-3.5 text-emerald-400" /> : <Copy className="w-3.5 h-3.5" />}
+            </button>
+            <button
+              onClick={shareRoom}
+              className="p-1 text-neutral-400 hover:text-white rounded transition"
+              title="Share Room"
+            >
+              <Share2 className="w-3.5 h-3.5" />
+            </button>
+          </div>
+        </div>
+
+        {/* Center/Right: Movie Title & Host Controls */}
+        <div className="flex items-center gap-2.5 sm:gap-4 flex-wrap">
+          <div className="flex items-center gap-2">
+            <span className="text-xs font-bold text-white truncate max-w-[160px] sm:max-w-xs">
+              {room.movieTitle}
+            </span>
+            {isOfflineSource && (
+              <span className="px-2 py-0.5 rounded-full text-[10px] font-semibold bg-amber-500/15 text-amber-400 border border-amber-500/30">
+                Offline Video
+              </span>
+            )}
+          </div>
+
+          {/* Change Media Option */}
+          <button
+            onClick={() => setIsChangeMediaOpen(true)}
+            className="flex items-center gap-1.5 px-3 py-1.5 rounded-xl text-xs font-semibold bg-neutral-800 hover:bg-neutral-750 text-neutral-200 hover:text-white border border-neutral-700 transition shadow-sm hover:border-rose-500/50"
+            title="Change Media Source (Search, MP4 URL, Offline Video)"
+          >
+            <RefreshCw className="w-3.5 h-3.5 text-rose-400" />
+            <span>Change Media</span>
+          </button>
+
+          {/* Host Admin Controls Lock Toggle */}
+          {isHost ? (
+            <button
+              onClick={handleToggleControlLock}
+              className={`flex items-center gap-1.5 px-3 py-1.5 rounded-xl text-xs font-semibold transition border ${
+                room.controlsLocked
+                  ? "bg-rose-500/15 border-rose-500 text-rose-300"
+                  : "bg-neutral-800 border-neutral-700 text-neutral-300 hover:text-white"
+              }`}
+              title="Toggle whether participants can play/pause/seek"
+            >
+              {room.controlsLocked ? (
+                <>
+                  <Lock className="w-3.5 h-3.5 text-rose-400" />
+                  <span>Controls: Host Only</span>
+                </>
+              ) : (
+                <>
+                  <Unlock className="w-3.5 h-3.5 text-neutral-400" />
+                  <span>Controls: Open</span>
+                </>
+              )}
+            </button>
           ) : (
-            <div className="w-full aspect-video bg-neutral-900/90 border border-neutral-800 rounded-2xl flex flex-col items-center justify-center p-6 text-center">
-              <HardDrive className="w-12 h-12 text-neutral-600 mb-3" />
-              <h4 className="text-base font-bold text-white">Offline Video Needed</h4>
-              <p className="text-xs text-neutral-400 max-w-md mt-1 mb-4">
-                Please select your local copy of "{room.offlineFileName || room.movieTitle}" using the button below to begin playback.
-              </p>
-              <button
-                onClick={() => setIsChangeMediaOpen(true)}
-                className="px-4 py-2 bg-neutral-800 hover:bg-neutral-700 text-rose-400 text-xs font-semibold rounded-xl border border-neutral-700 transition flex items-center gap-1.5"
-              >
-                <RefreshCw className="w-3.5 h-3.5" />
-                <span>Switch to Another Media</span>
-              </button>
+            <div className="flex items-center gap-1.5 text-xs text-neutral-400 px-2 py-1 rounded-lg bg-neutral-950">
+              {room.controlsLocked ? (
+                <>
+                  <Lock className="w-3.5 h-3.5 text-amber-400" />
+                  <span className="text-[11px]">Host Controls Locked</span>
+                </>
+              ) : (
+                <>
+                  <Unlock className="w-3.5 h-3.5 text-emerald-400" />
+                  <span className="text-[11px]">Controls Open</span>
+                </>
+              )}
             </div>
           )}
+
+          {/* Online count */}
+          <div className="flex items-center gap-1.5 text-xs text-neutral-300 bg-neutral-950 px-2.5 py-1.5 rounded-xl border border-neutral-800">
+            <Users className="w-3.5 h-3.5 text-rose-500" />
+            <span>{activeParticipantsCount} online</span>
+          </div>
         </div>
       </div>
 
-      {/* 2. ROOM CONTENT CONTAINER (Scrollable area below fixed player) */}
-      <div className="max-w-7xl w-full mx-auto px-3 sm:px-6 py-4 space-y-4 flex-1 pb-24 sm:pb-28">
-        {/* Room Header / Identity & Options */}
-        <div className="flex flex-wrap items-center justify-between gap-3 p-3 bg-neutral-900/90 border border-neutral-800 rounded-2xl backdrop-blur-md shadow-xl">
-          <div className="flex items-center gap-3">
-            <button
-              onClick={handleExplicitLeaveRoom}
-              className="p-2 text-neutral-400 hover:text-white rounded-xl hover:bg-neutral-800 transition flex items-center gap-1.5 text-xs font-semibold"
-              title="Leave Room"
-            >
-              <LogOut className="w-4 h-4" />
-              <span className="hidden sm:inline">Leave Room</span>
-            </button>
-
-            <div className="h-4 w-px bg-neutral-800" />
-
-            {/* Room Code Badge */}
-            <div className="flex items-center gap-2 bg-neutral-950 px-3 py-1.5 rounded-xl border border-neutral-800">
-              <span className="text-[10px] uppercase font-bold tracking-wider text-neutral-400">
-                Code:
-              </span>
-              <span className="font-mono text-base font-extrabold tracking-widest text-white">
-                {room.roomCode}
-              </span>
-              <button
-                onClick={copyRoomCode}
-                className="p-1 text-neutral-400 hover:text-white rounded transition"
-                title="Copy 4-digit code"
-              >
-                {copied ? <Check className="w-3.5 h-3.5 text-emerald-400" /> : <Copy className="w-3.5 h-3.5" />}
-              </button>
-              <button
-                onClick={shareRoom}
-                className="p-1 text-neutral-400 hover:text-white rounded transition"
-                title="Share Room"
-              >
-                <Share2 className="w-3.5 h-3.5" />
-              </button>
-            </div>
-          </div>
-
-          {/* Center/Right: Movie Title & Host Controls */}
-          <div className="flex items-center gap-2.5 sm:gap-4 flex-wrap">
-            <div className="flex items-center gap-2">
-              <span className="text-xs font-bold text-white truncate max-w-[160px] sm:max-w-xs">
-                {room.movieTitle}
-              </span>
-              {isOfflineSource && (
-                <span className="px-2 py-0.5 rounded-full text-[10px] font-semibold bg-amber-500/15 text-amber-400 border border-amber-500/30">
-                  Offline Video
-                </span>
-              )}
-            </div>
-
-            {/* Change Media Option */}
-            <button
-              onClick={() => setIsChangeMediaOpen(true)}
-              className="flex items-center gap-1.5 px-3 py-1.5 rounded-xl text-xs font-semibold bg-neutral-800 hover:bg-neutral-750 text-neutral-200 hover:text-white border border-neutral-700 transition shadow-sm hover:border-rose-500/50"
-              title="Change Media Source (Search, MP4 URL, Offline Video)"
-            >
-              <RefreshCw className="w-3.5 h-3.5 text-rose-400" />
-              <span>Change Media</span>
-            </button>
-
-            {/* Host Admin Controls Lock Toggle */}
-            {isHost ? (
-              <button
-                onClick={handleToggleControlLock}
-                className={`flex items-center gap-1.5 px-3 py-1.5 rounded-xl text-xs font-semibold transition border ${
-                  room.controlsLocked
-                    ? "bg-rose-500/15 border-rose-500 text-rose-300"
-                    : "bg-neutral-800 border-neutral-700 text-neutral-300 hover:text-white"
-                }`}
-                title="Toggle whether participants can play/pause/seek"
-              >
-                {room.controlsLocked ? (
-                  <>
-                    <Lock className="w-3.5 h-3.5 text-rose-400" />
-                    <span>Controls: Host Only</span>
-                  </>
-                ) : (
-                  <>
-                    <Unlock className="w-3.5 h-3.5 text-neutral-400" />
-                    <span>Controls: Open</span>
-                  </>
-                )}
-              </button>
-            ) : (
-              <div className="flex items-center gap-1.5 text-xs text-neutral-400 px-2 py-1 rounded-lg bg-neutral-950">
-                {room.controlsLocked ? (
-                  <>
-                    <Lock className="w-3.5 h-3.5 text-amber-400" />
-                    <span className="text-[11px]">Host Controls Locked</span>
-                  </>
-                ) : (
-                  <>
-                    <Unlock className="w-3.5 h-3.5 text-emerald-400" />
-                    <span className="text-[11px]">Controls Open</span>
-                  </>
-                )}
-              </div>
-            )}
-
-            {/* Online count */}
-            <div className="flex items-center gap-1.5 text-xs text-neutral-300 bg-neutral-950 px-2.5 py-1.5 rounded-xl border border-neutral-800">
-              <Users className="w-3.5 h-3.5 text-rose-500" />
-              <span>{activeParticipantsCount} online</span>
-            </div>
-          </div>
-        </div>
-
-        {/* Offline Video Prompt for Participants */}
-        {isOfflineSource && !localVideoUrl && (
-          <div className="p-4 sm:p-5 bg-amber-500/10 border border-amber-500/30 rounded-2xl animate-in fade-in space-y-3">
-            <div className="flex flex-col sm:flex-row items-start sm:items-center justify-between gap-4">
-              <div className="flex items-start gap-3">
-                <div className="p-2.5 bg-amber-500/20 text-amber-400 rounded-xl shrink-0 mt-0.5">
-                  <HardDrive className="w-5 h-5" />
-                </div>
-                <div>
-                  <h4 className="text-sm font-bold text-white">
-                    This room is using an offline video file
-                  </h4>
-                  <p className="text-xs text-neutral-300 mt-1 leading-relaxed">
-                    Expected file: <strong className="text-amber-300">"{room.offlineFileName || room.movieTitle}"</strong>
-                    {room.offlineDuration ? (
-                      <span> (Duration: <strong className="text-amber-300">{formatVideoTime(room.offlineDuration)}</strong>)</span>
-                    ) : null}.
-                    Select your local copy of this video from your device to watch together with synchronized playback.
-                  </p>
-                </div>
-              </div>
-
-              <label className={`px-4 py-2.5 ${isExtractingDuration ? "bg-amber-800 cursor-wait" : "bg-amber-600 hover:bg-amber-500 cursor-pointer"} text-white text-xs font-semibold rounded-xl shadow-lg transition shrink-0 flex items-center gap-2`}>
-                {isExtractingDuration ? (
-                  <>
-                    <Loader2 className="w-4 h-4 animate-spin" />
-                    <span>Checking file...</span>
-                  </>
-                ) : (
-                  <>
-                    <HardDrive className="w-4 h-4" />
-                    <span>Select File on Your Device</span>
-                  </>
-                )}
-                <input
-                  type="file"
-                  accept="video/*,.mp4,.mkv,.mov,.avi,.webm,.m4v,.flv,.wmv,.3gp,.ts,.m2ts"
-                  disabled={isExtractingDuration}
-                  className="hidden"
-                  onChange={handleOfflineFileSelect}
-                />
-              </label>
-            </div>
-
-            {offlineDurationError && (
-              <div className="p-3 bg-rose-500/15 border border-rose-500/30 rounded-xl text-rose-300 text-xs flex items-center gap-2">
-                <AlertCircle className="w-4 h-4 shrink-0 text-rose-400" />
-                <span>{offlineDurationError}</span>
-              </div>
-            )}
-          </div>
-        )}
-
-        {room.movieCompleted && (
-          <div className="p-5 bg-gradient-to-r from-neutral-900 to-neutral-850 border border-neutral-750 rounded-2xl shadow-xl flex flex-col sm:flex-row items-center justify-between gap-4">
-            <div className="flex items-center gap-3">
-              <div className="p-2.5 bg-emerald-500/15 text-emerald-400 rounded-xl shrink-0">
-                <CheckCircle2 className="w-6 h-6" />
+      {/* Offline Video Prompt for Participants */}
+      {isOfflineSource && !localVideoUrl && (
+        <div className="p-4 sm:p-5 bg-amber-500/10 border border-amber-500/30 rounded-2xl animate-in fade-in space-y-3">
+          <div className="flex flex-col sm:flex-row items-start sm:items-center justify-between gap-4">
+            <div className="flex items-start gap-3">
+              <div className="p-2.5 bg-amber-500/20 text-amber-400 rounded-xl shrink-0 mt-0.5">
+                <HardDrive className="w-5 h-5" />
               </div>
               <div>
-                <h4 className="text-base font-bold text-white">The movie has finished!</h4>
-                <p className="text-xs text-neutral-400 mt-0.5">
-                  Watch session ended. Real-time chat has been cleared.
+                <h4 className="text-sm font-bold text-white">
+                  This room is using an offline video file
+                </h4>
+                <p className="text-xs text-neutral-300 mt-1 leading-relaxed">
+                  Expected file: <strong className="text-amber-300">"{room.offlineFileName || room.movieTitle}"</strong>
+                  {room.offlineDuration ? (
+                    <span> (Duration: <strong className="text-amber-300">{formatVideoTime(room.offlineDuration)}</strong>)</span>
+                  ) : null}.
+                  Select your local copy of this video from your device to watch together with synchronized playback.
                 </p>
               </div>
             </div>
 
-            <div className="flex items-center gap-2.5 flex-wrap">
-              <button
-                onClick={() => setIsChangeMediaOpen(true)}
-                className="px-4 py-2 bg-rose-600 hover:bg-rose-500 text-white text-xs font-semibold rounded-xl transition flex items-center gap-1.5 shadow"
-              >
-                <RefreshCw className="w-3.5 h-3.5" />
-                <span>Change Media</span>
-              </button>
-              {isHost && (
-                <button
-                  onClick={handleReplayMovie}
-                  className="px-4 py-2 bg-neutral-800 hover:bg-neutral-750 text-white text-xs font-semibold rounded-xl transition"
-                >
-                  Replay Movie
-                </button>
+            <label className={`px-4 py-2.5 ${isExtractingDuration ? "bg-amber-800 cursor-wait" : "bg-amber-600 hover:bg-amber-500 cursor-pointer"} text-white text-xs font-semibold rounded-xl shadow-lg transition shrink-0 flex items-center gap-2`}>
+              {isExtractingDuration ? (
+                <>
+                  <Loader2 className="w-4 h-4 animate-spin" />
+                  <span>Checking file...</span>
+                </>
+              ) : (
+                <>
+                  <HardDrive className="w-4 h-4" />
+                  <span>Select File on Your Device</span>
+                </>
               )}
-              <button
-                onClick={handleExplicitLeaveRoom}
-                className="px-4 py-2 bg-neutral-800 hover:bg-neutral-700 text-neutral-300 hover:text-white text-xs font-semibold rounded-xl transition"
-              >
-                Browse Movies
-              </button>
-            </div>
+              <input
+                type="file"
+                accept="video/*,.mp4,.mkv,.mov,.avi,.webm,.m4v,.flv,.wmv,.3gp,.ts,.m2ts"
+                disabled={isExtractingDuration}
+                className="hidden"
+                onChange={handleOfflineFileSelect}
+              />
+            </label>
           </div>
-        )}
 
-        {/* Room Details Info Card */}
-        <div className="p-4 bg-neutral-900/80 border border-neutral-800 rounded-2xl backdrop-blur-sm flex flex-wrap items-center justify-between gap-3 text-xs">
+          {offlineDurationError && (
+            <div className="p-3 bg-rose-500/15 border border-rose-500/30 rounded-xl text-rose-300 text-xs flex items-center gap-2">
+              <AlertCircle className="w-4 h-4 shrink-0 text-rose-400" />
+              <span>{offlineDurationError}</span>
+            </div>
+          )}
+        </div>
+      )}
+      {room.movieCompleted && (
+        <div className="p-5 bg-gradient-to-r from-neutral-900 to-neutral-850 border border-neutral-750 rounded-2xl shadow-xl flex flex-col sm:flex-row items-center justify-between gap-4">
           <div className="flex items-center gap-3">
-            <div className="w-8 h-8 rounded-xl bg-neutral-800 flex items-center justify-center text-rose-500 font-bold">
-              <Film className="w-4 h-4" />
+            <div className="p-2.5 bg-emerald-500/15 text-emerald-400 rounded-xl shrink-0">
+              <CheckCircle2 className="w-6 h-6" />
             </div>
             <div>
-              <div className="flex items-center gap-2 flex-wrap">
-                <p className="font-bold text-white">{room.movieTitle}</p>
-                {roomSeriesStructure?.isSeries && (
-                  <span className="px-2 py-0.5 rounded-md bg-rose-500/20 text-rose-300 text-[10px] font-semibold border border-rose-500/30">
-                    S{room.season || 1} : EP{room.episode || 1}
-                  </span>
-                )}
-              </div>
-              <p className="text-neutral-400 text-[11px]">
-                Hosted by <span className="text-neutral-200">@{room.adminUsername}</span>
+              <h4 className="text-base font-bold text-white">The movie has finished!</h4>
+              <p className="text-xs text-neutral-400 mt-0.5">
+                Watch session ended. Real-time chat has been cleared.
               </p>
             </div>
           </div>
 
-          <div className="flex items-center gap-2">
+          <div className="flex items-center gap-2.5 flex-wrap">
             <button
               onClick={() => setIsChangeMediaOpen(true)}
-              className="flex items-center gap-1.5 px-3 py-1.5 rounded-xl text-xs font-semibold bg-rose-600/15 text-rose-300 border border-rose-500/30 hover:bg-rose-600 hover:text-white transition shadow-sm"
+              className="px-4 py-2 bg-rose-600 hover:bg-rose-500 text-white text-xs font-semibold rounded-xl transition flex items-center gap-1.5 shadow"
             >
               <RefreshCw className="w-3.5 h-3.5" />
               <span>Change Media</span>
             </button>
-            <div className="flex items-center gap-1.5 text-neutral-400 text-[11px] bg-neutral-950 px-2.5 py-1.5 rounded-xl border border-neutral-800">
-              <Clock className="w-3.5 h-3.5" />
-              <span>24h Expiry</span>
+            {isHost && (
+              <button
+                onClick={handleReplayMovie}
+                className="px-4 py-2 bg-neutral-800 hover:bg-neutral-750 text-white text-xs font-semibold rounded-xl transition"
+              >
+                Replay Movie
+              </button>
+            )}
+            <button
+              onClick={handleExplicitLeaveRoom}
+              className="px-4 py-2 bg-neutral-800 hover:bg-neutral-700 text-neutral-300 hover:text-white text-xs font-semibold rounded-xl transition"
+            >
+              Browse Movies
+            </button>
+          </div>
+        </div>
+      )}
+
+      {/* Main Watch Room Grid: Video Player (Left) + Chat / Participants (Right) */}
+      <div className="grid grid-cols-1 lg:grid-cols-12 gap-4 items-start">
+        {/* Video Player Column */}
+        <div className="w-full lg:col-span-8 space-y-3 sm:space-y-4">
+          {/* Sticky Video Player Container - Pinned at top-0 with z-9999 only once scrolled to top */}
+          <div
+            className={`sticky top-0 z-[9999] ${isOfflineSource ? "bg-transparent" : "bg-neutral-950/95"} py-1.5 sm:py-2 -mx-1 px-1 rounded-2xl watch-room-sticky-player`}
+            style={{
+              zIndex: 9999,
+              top: 0
+            }}
+          >
+            {effectiveVideoSrc ? (
+              <VideoPlayer
+                src={effectiveVideoSrc}
+                poster={room.moviePoster}
+                isHost={isHost}
+                controlsLocked={room.controlsLocked}
+                syncState={room.playbackState}
+                onPlaybackChange={handlePlaybackChange}
+                onAudioTrackChange={handleAudioTrackChange}
+                onVideoEnded={handleVideoEnded}
+                roomCode={roomCode}
+                currentUserId={user?.uid}
+                seriesStructure={roomSeriesStructure}
+                currentSeason={room.season || 1}
+                currentEpisode={room.episode || 1}
+                onSelectEpisode={handleSelectEpisode}
+                subtitle={effectiveSubtitle}
+              />
+            ) : (
+              <div className="w-full aspect-video bg-neutral-900/90 border border-neutral-800 rounded-2xl flex flex-col items-center justify-center p-6 text-center">
+                <HardDrive className="w-12 h-12 text-neutral-600 mb-3" />
+                <h4 className="text-base font-bold text-white">Offline Video Needed</h4>
+                <p className="text-xs text-neutral-400 max-w-md mt-1 mb-4">
+                  Please select your local copy of "{room.offlineFileName || room.movieTitle}" using the button above to begin playback.
+                </p>
+                <button
+                  onClick={() => setIsChangeMediaOpen(true)}
+                  className="px-4 py-2 bg-neutral-800 hover:bg-neutral-700 text-rose-400 text-xs font-semibold rounded-xl border border-neutral-700 transition flex items-center gap-1.5"
+                >
+                  <RefreshCw className="w-3.5 h-3.5" />
+                  <span>Or Switch to Another Media</span>
+                </button>
+              </div>
+            )}
+          </div>
+
+          {/* Room Details Accordion / Info Card */}
+          <div className="p-4 bg-neutral-900/80 border border-neutral-800 rounded-2xl backdrop-blur-sm flex flex-wrap items-center justify-between gap-3 text-xs">
+            <div className="flex items-center gap-3">
+              <div className="w-8 h-8 rounded-xl bg-neutral-800 flex items-center justify-center text-rose-500 font-bold">
+                <Film className="w-4 h-4" />
+              </div>
+              <div>
+                <div className="flex items-center gap-2 flex-wrap">
+                  <p className="font-bold text-white">{room.movieTitle}</p>
+                  {roomSeriesStructure?.isSeries && (
+                    <span className="px-2 py-0.5 rounded-md bg-rose-500/20 text-rose-300 text-[10px] font-semibold border border-rose-500/30">
+                      S{room.season || 1} : EP{room.episode || 1}
+                    </span>
+                  )}
+                </div>
+                <p className="text-neutral-400 text-[11px]">
+                  Hosted by <span className="text-neutral-200">@{room.adminUsername}</span>
+                </p>
+              </div>
+            </div>
+
+            <div className="flex items-center gap-2">
+              <button
+                onClick={() => setIsChangeMediaOpen(true)}
+                className="flex items-center gap-1.5 px-3 py-1.5 rounded-xl text-xs font-semibold bg-rose-600/15 text-rose-300 border border-rose-500/30 hover:bg-rose-600 hover:text-white transition shadow-sm"
+              >
+                <RefreshCw className="w-3.5 h-3.5" />
+                <span>Change Media</span>
+              </button>
+              <div className="flex items-center gap-1.5 text-neutral-400 text-[11px] bg-neutral-950 px-2.5 py-1.5 rounded-xl border border-neutral-800">
+                <Clock className="w-3.5 h-3.5" />
+                <span>24h Expiry</span>
+              </div>
             </div>
           </div>
         </div>
 
-        {/* Chat & Participants Section */}
-        <div className="w-full flex flex-col h-[500px] sm:h-[560px]">
+        {/* Chat & Participants Column */}
+        <div className="w-full lg:col-span-4 flex flex-col h-[460px] sm:h-[520px] lg:h-[550px] lg:max-h-[70vh] min-h-[360px] sm:min-h-[480px]">
           {/* Tabs for Mobile/Desktop */}
-          <div className="flex items-center gap-1 p-1 bg-neutral-950 rounded-xl border border-neutral-800 mb-2 shrink-0">
+          <div className="flex items-center gap-1 p-1 bg-neutral-950 rounded-xl border border-neutral-800 mb-2">
             <button
               onClick={() => setActiveTab("chat")}
               className={`flex-1 py-1.5 text-xs font-semibold rounded-lg transition ${
