@@ -198,7 +198,7 @@ export function RoomChat({
   return (
     <div className="flex flex-col h-full bg-neutral-900/90 border border-neutral-800 rounded-2xl overflow-hidden backdrop-blur-sm">
       {/* Header */}
-      <div className="px-4 py-3 border-b border-neutral-800 bg-neutral-900/90 flex items-center justify-between">
+      <div className="px-4 py-3 border-b border-neutral-800 bg-neutral-900/90 flex items-center justify-between shrink-0">
         <div className="flex items-center gap-2">
           <MessageSquare className="w-4 h-4 text-rose-500" />
           <h4 className="text-sm font-bold text-white tracking-wide">Live Room Chat</h4>
@@ -211,7 +211,7 @@ export function RoomChat({
       {/* Messages List */}
       <div 
         ref={messagesContainerRef}
-        className="flex-1 overflow-y-auto p-3 sm:p-4 space-y-3.5 min-h-[160px] overscroll-contain"
+        className="flex-1 overflow-y-auto p-3 sm:p-4 space-y-3.5 overscroll-contain min-h-0"
         style={{ WebkitOverflowScrolling: "touch" }}
       >
         {isMovieCompleted ? (
@@ -311,9 +311,9 @@ export function RoomChat({
         )}
       </div>
 
-      {/* Message Input */}
+      {/* Message Input - Fixed or statically placed at bottom of chat panel */}
       <div 
-        className="p-2.5 sm:p-3 border-t border-neutral-800 bg-neutral-950/95 transition-all duration-150"
+        className="p-2.5 sm:p-3 border-t border-neutral-800 bg-neutral-950/95 transition-all duration-150 shrink-0"
         style={{
           paddingBottom: keyboardOffset > 0 
             ? `${keyboardOffset + 8}px` 
@@ -330,7 +330,6 @@ export function RoomChat({
             action="#" 
             className="flex items-center gap-2"
           >
-
             <input
               ref={chatInputRef}
               type="text"
@@ -345,7 +344,7 @@ export function RoomChat({
             <button
               type="submit"
               disabled={!inputText.trim() || isSending || isMovieCompleted}
-              className="p-2.5 bg-rose-600 hover:bg-rose-500 text-white rounded-xl transition disabled:opacity-40 shadow-sm"
+              className="p-2.5 bg-rose-600 hover:bg-rose-500 text-white rounded-xl transition disabled:opacity-40 shadow-sm shrink-0"
               title="Send message"
             >
               <Send className="w-4 h-4" />
@@ -358,7 +357,7 @@ export function RoomChat({
       {selectedAvatar && (
         <div
           onClick={() => setSelectedAvatar(null)}
-          className="fixed inset-0 bg-black/85 backdrop-blur-md z-50 flex items-center justify-center p-4 animate-in fade-in duration-200"
+          className="fixed inset-0 bg-black/85 backdrop-blur-md z-[60000] flex items-center justify-center p-4 animate-in fade-in duration-200"
         >
           <div
             onClick={(e) => e.stopPropagation()}
@@ -381,7 +380,7 @@ export function RoomChat({
                   alt={selectedAvatar.username}
                   className="w-full h-full object-cover"
                   referrerPolicy="no-referrer"
-                ></img>
+                />
               ) : (
                 <span>{selectedAvatar.initials}</span>
               )}
